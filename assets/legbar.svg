@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="legbar: a crested, barred chicken">
+  <!-- Legbar: crested head, barred plumage. Saturated palette on purpose --
+       every colour has to read on a white README and a dark one, so nothing
+       here depends on the page background. -->
+  <g fill="none" stroke="none">
+
+    <!-- crest: the tuft that makes it a Legbar and not a generic hen -->
+    <path d="M96 34 C88 20, 78 22, 76 30 C70 20, 60 26, 64 36 C58 32, 54 40, 62 46 Z"
+          fill="#6B4423"/>
+    <path d="M99 33 C95 22, 86 24, 85 31 C80 23, 72 28, 75 36 Z"
+          fill="#8A5A2E"/>
+
+    <!-- comb -->
+    <path d="M104 32 C110 22, 118 26, 116 34 C122 28, 129 33, 125 41 L106 44 Z"
+          fill="#C4453B"/>
+
+    <!-- head -->
+    <circle cx="112" cy="56" r="24" fill="#D99A2B"/>
+
+    <!-- beak -->
+    <path d="M134 54 L152 60 L134 66 Z" fill="#E8B44A"/>
+
+    <!-- wattle -->
+    <path d="M124 74 C132 78, 132 90, 124 92 C118 88, 118 78, 124 74 Z"
+          fill="#C4453B"/>
+
+    <!-- eye -->
+    <circle cx="120" cy="50" r="4.5" fill="#2B1E14"/>
+
+    <!-- body -->
+    <path d="M112 78 C74 78, 44 104, 44 134 C44 158, 66 172, 96 172
+             C128 172, 152 156, 152 130 C152 100, 136 78, 112 78 Z"
+          fill="#D99A2B"/>
+
+    <!-- barring: the 'bar' in Legbar, an autosexing breed's banded plumage -->
+    <g fill="#6B4423">
+      <path d="M60 108 C74 100, 96 96, 116 98 L114 108 C96 106, 76 110, 64 117 Z"/>
+      <path d="M50 126 C70 116, 100 112, 128 116 L126 126 C100 122, 72 126, 53 135 Z"/>
+      <path d="M47 145 C68 135, 102 132, 134 137 L132 147 C102 142, 70 145, 51 154 Z"/>
+    </g>
+
+    <!-- tail -->
+    <path d="M46 108 C28 92, 20 70, 26 58 C38 66, 50 84, 56 100 Z" fill="#6B4423"/>
+    <path d="M52 104 C40 86, 36 68, 42 58 C52 68, 60 86, 62 98 Z" fill="#8A5A2E"/>
+
+    <!-- legs -->
+    <g stroke="#E8B44A" stroke-width="7" stroke-linecap="round">
+      <path d="M84 170 L80 188"/>
+      <path d="M114 170 L118 188"/>
+    </g>
+    <g stroke="#E8B44A" stroke-width="5" stroke-linecap="round">
+      <path d="M80 188 L68 194"/><path d="M80 188 L80 196"/><path d="M80 188 L91 194"/>
+      <path d="M118 188 L106 194"/><path d="M118 188 L118 196"/><path d="M118 188 L129 194"/>
+    </g>
+  </g>
+</svg>
