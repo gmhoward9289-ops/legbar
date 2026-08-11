@@ -1,0 +1,142 @@
+name: release
+
+# Builds the wheel and sdist for a tag, verifies the built package actually
+# runs, attaches both to the GitHub Release, and publishes to PyPI via OIDC
+# trusted publishing -- no API token exists anywhere, not in secrets and not
+# on a laptop.
+#
+# PyPI is deliberately the only channel here. The sibling repos publish to
+# brew, npm and a signed apt repo as well, and each of those carries its own
+# one-time credential setup (a tap PAT, an npm trusted publisher, a GPG
+# signing key). Adding them before the first PyPI release has ever run would
+# mean debugging four publish paths at once against a package that has never
+# been published. They come one at a time, after this one is green.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and verify only -- publishes nothing, attaches nothing.
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install --upgrade build packaging
+          python -m build
+
+      # The version lives in legbar.py alone. A tag that disagrees with it
+      # would publish artifacts whose filenames contradict the release they
+      # hang off.
+      - name: Check the tag matches __version__
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          code_version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' legbar.py)
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$code_version" != "$tag_version" ]; then
+            echo "::error::tag $tag_version != __version__ $code_version" >&2
+            exit 1
+          fi
+
+      # PEP 440 normalises the version before it reaches the wheel filename --
+      # "0.1.0-alpha" becomes "0.1.0a0", so a raw string comparison against
+      # __version__ would fail on a perfectly valid prerelease. Compare the
+      # normalisation instead, and print both so the drift between the tag and
+      # what PyPI will display is visible in the log rather than discovered on
+      # the project page.
+      - name: Check the wheel filename matches the normalised version
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys
+          from packaging.version import Version
+          code = re.search(r'^__version__ = "(.*)"', pathlib.Path("legbar.py").read_text(), re.M).group(1)
+          wheel = next(pathlib.Path("dist").glob("*.whl")).name.split("-")[1]
+          print(f"__version__ / tag : {code}")
+          print(f"wheel and sdist   : {wheel}   (what PyPI will display)")
+          if str(Version(code)) != wheel:
+              print(f"::error::{code} normalises to {Version(code)}, but the wheel says {wheel}")
+              sys.exit(1)
+          if code != wheel:
+              print(f"::warning::PyPI will show {wheel}, not {code} -- valid, but the tag and the project page will read differently")
+          PY
+
+      # Everything below runs against the built artifact, not the source tree.
+      # A wheel that imports in the repo root and nowhere else is the classic
+      # packaging failure, and it is invisible until someone installs it.
+      - name: Verify the built package actually runs
+        run: |
+          python -m venv /tmp/v
+          /tmp/v/bin/pip install --quiet dist/*.whl
+          /tmp/v/bin/legbar --version
+          /tmp/v/bin/python -c "import legbar, henhouse"
+
+      # The empty-fleet case is the contract legbar's CI already guards, and
+      # it has to survive packaging too: henhouse must be importable *and*
+      # runnable from the installed wheel, not just from a checkout.
+      - name: Verify the installed package degrades on an empty fleet
+        env:
+          LEGBAR_SESSIONS_DIR: ${{ runner.temp }}/no-sessions
+          LEGBAR_PROJECTS_DIR: ${{ runner.temp }}/no-projects
+          LEGBAR_CURSOR_HOME: ${{ runner.temp }}/no-cursor
+        run: |
+          cd /tmp
+          /tmp/v/bin/legbar --json --no-git --no-ci > state.json
+          /tmp/v/bin/python -c "import json; d=json.load(open('state.json')); assert d['sessions']==[], d['sessions']; print('empty-fleet JSON ok')"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/*
+
+      # Pushing a tag does not create a GitHub Release, so uploading straight
+      # to one fails on a plain `git push --tags`. Create it if it is not there
+      # and upload either way, so the tag is the only step a release needs.
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Canonical PEP 440 prerelease spellings only -- aN / bN / rcN. The
+          # repo does not use -alpha or .beta forms precisely because they are
+          # not what ends up on the wheel.
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *a[0-9]*|*b[0-9]*|*rc[0-9]*) prerelease="--prerelease" ;; esac
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes $prerelease
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+
+  # Publishes the tagged build to PyPI via trusted publishing (OIDC): PyPI
+  # trusts this repo's release.yml through the "pypi" environment, so there is
+  # no token to store, leak or rotate.
+  #
+  # One-time setup this job depends on and cannot do for itself: register a
+  # pending Trusted Publisher on PyPI for the project "legbar", pointing at
+  # owner gmhoward9289-ops, repository legbar, workflow release.yml,
+  # environment "pypi". Until that exists this job fails alone -- the release
+  # itself, and the artifacts attached to it, still land.
+  pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
