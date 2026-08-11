@@ -33,13 +33,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import time
+from pathlib import Path
 
 import henhouse
 
-__version__ = "0.1.0-alpha"
+__version__ = "0.1.0"
 
 NAME = "legbar"
 
@@ -108,7 +110,7 @@ def collect(use_git=True, ci=True):
         r["source"] = "claude"
         r["model"] = t.get("model")
         r["burn_tokens"] = t.get("burn_tokens")
-        r["idle_secs"] = None
+        r["idle_secs"] = t.get("idle_secs")
 
     for c in henhouse.load_cursor_sessions():
         project, tree = henhouse.split_path(c["cwd"])
@@ -132,6 +134,8 @@ def collect(use_git=True, ci=True):
             "idle_secs": c["idle_secs"],
         })
 
+    mark_contested(rows)
+
     events, gh_warn = ([], "") if not ci else henhouse.github_feed()
     return {
         "sessions": sorted(rows, key=session_sort),
@@ -139,6 +143,66 @@ def collect(use_git=True, ci=True):
         "warn": warn,
         "gh_warn": gh_warn,
     }
+
+
+def waiting_on(r):
+    """(who, seconds) -- which side of the conversation is pending, and for
+    how long. ("", None) when nothing is outstanding.
+
+    Context percentage says how full a session is, which is a resource
+    question. This is the different, more urgent question: is anyone blocked,
+    and on whom. `needsinput` means the model has answered and is waiting on a
+    human; `working` means the human has asked and is waiting on the model.
+    """
+    status = (r.get("status") or "").lower()
+    secs = r.get("idle_secs")
+    if status in henhouse.ATTENTION:
+        return "you", secs
+    if status == "working":
+        return "cc" if r.get("source") == "claude" else "cu", secs
+    return "", None
+
+
+def wait_cell(r, width=9):
+    who, secs = waiting_on(r)
+    if not who:
+        return "-".ljust(width)
+    return ("%s %s" % (who, henhouse.ago(secs) if secs is not None else "?")
+            ).ljust(width)[:width]
+
+
+def mark_contested(rows):
+    """Re-derive `contested` from the real git working copy.
+
+    henhouse.build() infers a (project, tree) pair from the path, and that
+    inference only understands directories under REPOS_ROOT. Anything else --
+    every repo under ~/dev on this machine -- collapses to project "dev" with
+    no tree, so sessions in heron-ops, swamp-ops and legbar were grouped as
+    though they shared one checkout and every one of them was flagged
+    contested. The highest-consequence signal in the tool was firing on a path
+    heuristic that happened to be wrong for the primary working root.
+
+    Git already knows the answer, so ask it: two sessions contest each other
+    only when `rev-parse --show-toplevel` resolves to the same directory. A
+    session whose cwd is not in a repo at all contests nothing.
+    """
+    roots = {}
+    for r in rows:
+        d = r.get("dir") or ""
+        if not d:
+            r["worktree"] = ""
+            continue
+        if d not in roots:
+            top = henhouse.git(Path(d), "rev-parse", "--show-toplevel") or ""
+            roots[d] = os.path.normcase(os.path.normpath(top.strip())) if top else ""
+        r["worktree"] = roots[d]
+
+    counts = {}
+    for r in rows:
+        if r.get("worktree"):
+            counts[r["worktree"]] = counts.get(r["worktree"], 0) + 1
+    for r in rows:
+        r["contested"] = counts.get(r.get("worktree") or "", 0) > 1
 
 
 def session_sort(r):
@@ -158,6 +222,93 @@ def session_sort(r):
 # ---------------------------------------------------------------------------
 
 
+ACTION_LIMIT = 5
+
+
+def actions(state):
+    """Everything wanting a human, worst consequence first.
+
+    Ranked by what going unnoticed actually costs, not by recency:
+
+      0. A contested working tree -- two or more live sessions editing one
+         checkout. This is the only item here that destroys work rather than
+         merely delaying it: two agents writing the same files overwrite each
+         other, and the loss is silent and unrecoverable. It outranks
+         everything even when it is the least urgent-looking row on screen.
+      1. A conversation waiting on you, oldest first. Costs time, not
+         integrity -- a session sat unanswered is simply not progressing.
+      2. Red CI, which is already broken and will keep being broken; it is
+         cheap to leave for ten minutes, which is exactly why it ranks last.
+
+    Returns dicts, not strings, so the ranking is testable without parsing a
+    rendered line.
+    """
+    out = []
+
+    # Contested trees, grouped -- three sessions in one checkout is ONE
+    # problem, not three rows of the same problem.
+    trees = {}
+    for r in state["sessions"]:
+        if r.get("contested"):
+            # Key on the real working copy, and name the row after it. The
+            # inferred project is "dev" for every repo under the primary
+            # working root, which would label every collision identically.
+            wt = r.get("worktree") or r.get("project") or "-"
+            trees.setdefault(wt, []).append(r.get("name") or "-")
+    for wt, names in sorted(trees.items()):
+        out.append({
+            "rank": 0, "kind": "CONTESTED",
+            "subject": os.path.basename(wt.rstrip("\\/")) or wt,
+            "detail": "%d sessions in one working copy: %s"
+                      % (len(names), ", ".join(sorted(names))),
+        })
+
+    waits = [(r.get("idle_secs") or 0, r) for r in state["sessions"]
+             if (r.get("status") or "") in henhouse.ATTENTION]
+    for secs, r in sorted(waits, reverse=True):
+        out.append({
+            "rank": 1, "kind": "WAITING",
+            "subject": r.get("name") or "-",
+            "detail": "needs your reply -- %s" % henhouse.ago(secs),
+        })
+
+    for e in state["ci"]:
+        red = e.get("state") == "failed" or e.get("checks") == "red"
+        if not red:
+            continue
+        label = (e.get("name") or e.get("workflow") or "run"
+                 if e.get("kind") == "run"
+                 else "#%s %s" % (e.get("number", "?"), e.get("title") or "pr"))
+        out.append({"rank": 2, "kind": "CI RED",
+                    "subject": e.get("repo") or "-", "detail": label})
+
+    return out
+
+
+def action_lines(state, width):
+    items = actions(state)
+    if not items:
+        return []
+    out = ["NEEDS YOU", "-" * min(width, 9)]
+    for it in items[:ACTION_LIMIT]:
+        # Two markers for the destructive class, one for the merely blocked --
+        # legible without colour, which a terminal may not have.
+        mark = "!!" if it["rank"] == 0 else (" !" if it["rank"] == 1 else "  ")
+        out.append(clip("%s %-10s %-16s %s"
+                        % (mark, it["kind"], clip(it["subject"], 16),
+                           it["detail"]), width))
+    if len(items) > ACTION_LIMIT:
+        # Never truncate silently: a hidden contested tree is the exact thing
+        # this section exists to stop happening.
+        out.append(clip("   ... and %d more (%d contested, %d waiting, %d ci)"
+                        % (len(items) - ACTION_LIMIT,
+                           sum(1 for i in items if i["rank"] == 0),
+                           sum(1 for i in items if i["rank"] == 1),
+                           sum(1 for i in items if i["rank"] == 2)), width))
+    out.append("")
+    return out
+
+
 def header(state, width):
     n = len(state["sessions"])
     cursor_n = sum(1 for r in state["sessions"] if r["source"] == "cursor")
@@ -167,11 +318,19 @@ def header(state, width):
               if e.get("state") == "failed" or e.get("checks") == "red")
     held = sum(r.get("burn_tokens") or 0 for r in state["sessions"])
 
+    # Longest-waiting first: "3 need you (12m)" is a different call to action
+    # from "3 need you (4s)", and the count alone cannot tell them apart.
+    waits = sorted((r.get("idle_secs") or 0) for r in state["sessions"]
+                   if (r.get("status") or "") in henhouse.ATTENTION)
+    contested = sum(1 for r in state["sessions"] if r.get("contested"))
+
     bits = ["%s  %d session%s" % (NAME, n, "" if n == 1 else "s")]
     if cursor_n:
         bits.append("%d cursor" % cursor_n)
     if attention:
-        bits.append("%d need input" % attention)
+        bits.append("%d need you (%s)" % (attention, henhouse.ago(waits[-1])))
+    if contested:
+        bits.append("%d contested" % contested)
     if red:
         bits.append("%d ci red" % red)
     if held:
@@ -199,20 +358,29 @@ def bar(pct, cells=10):
 def session_lines(state, width):
     out = ["SESSIONS", "-" * min(width, 8)]
     if not state["sessions"]:
-        out.append(clip("no live sessions", width))
+        # "collecting" and "nothing running" are different facts, and on the
+        # first frame the difference is the whole question the user has.
+        out.append(clip("collecting..." if state.get("loading")
+                        else "no live sessions", width))
         return out
     for r in state["sessions"]:
         src = "cu" if r["source"] == "cursor" else "cc"
         pct = r.get("context_pct")
         pct_s = "%3d%%" % round(pct) if pct is not None else "   -"
-        line = "%-2s %-12s %-4s %s %s %-11s %s" % (
+        # A contested tree is two live sessions editing one working copy, which
+        # is the collision that actually loses work. It outranks anything else
+        # on the row, so it gets the leading glyph rather than a column.
+        flag = "!" if r.get("contested") else " "
+        line = "%s%-2s %-12s %-4s %s %s %-9s %-11s %s" % (
+            flag,
             src,
             clip(r.get("name") or "-", 12),
             short_model(r.get("model")),
             bar(pct),
             pct_s,
+            wait_cell(r),
             clip(r.get("status") or "-", 11),
-            clip(r.get("task") or r.get("project") or "", max(0, width - 52)),
+            clip(r.get("task") or r.get("project") or "", max(0, width - 63)),
         )
         out.append(clip(line, width))
     if state.get("warn"):
@@ -226,7 +394,8 @@ def ci_lines(state, width):
         out.append(clip("gh unavailable: %s" % state["gh_warn"], width))
         return out
     if not state["ci"]:
-        out.append(clip("nothing running, nothing red", width))
+        out.append(clip("collecting..." if state.get("loading")
+                        else "nothing running, nothing red", width))
         return out
     for e in state["ci"]:
         if e.get("kind") == "run":
@@ -245,8 +414,13 @@ def ci_lines(state, width):
 
 def render(state, width):
     """Two panes side by side, or stacked when the terminal is too narrow."""
+    # The action band spans the full width above both panes, deliberately: it
+    # is the one thing worth reading before anything else, and putting it in a
+    # column would make it compete with the pane beside it.
+    band = action_lines(state, width)
+
     if width < MIN_SPLIT:
-        lines = [header(state, width), ""]
+        lines = [header(state, width), ""] + band
         lines += session_lines(state, width) + [""] + ci_lines(state, width)
         return lines
 
@@ -255,7 +429,7 @@ def render(state, width):
     left = session_lines(state, left_w)
     right = ci_lines(state, right_w)
 
-    lines = [header(state, width), ""]
+    lines = [header(state, width), ""] + band
     for i in range(max(len(left), len(right))):
         l = left[i] if i < len(left) else ""
         r = right[i] if i < len(right) else ""
@@ -275,21 +449,27 @@ def run_curses(args):
         curses.curs_set(0)
         scr.nodelay(True)
         use_git = not args.no_git
-        state = collect(use_git=use_git)
-        last = time.time()
+
+        # Paint before collecting, not after. The first collect() runs the gh
+        # sweep, which takes tens of seconds across many clones -- collecting
+        # first leaves the terminal blank that whole time, indistinguishable
+        # from a hang. `last = None` means "draw this frame, then collect".
+        state = {"sessions": [], "ci": [], "warn": "", "gh_warn": "",
+                 "loading": True}
+        last = None
         while True:
             ch = scr.getch()
-            if ch in (ord("q"), 27):
+            # Deliberately NOT ESC (27). Windows terminals emit escape
+            # sequences at startup that PDCurses surfaces as a bare 27, so
+            # quitting on it made legbar exit before its first paint -- it
+            # looked like the program did nothing at all. q, or Ctrl-C.
+            if ch == ord("q"):
                 return
             if ch == ord("g"):
                 use_git = not use_git
-                last = 0
+                last = None
             if ch == ord("r"):
-                last = 0
-
-            if time.time() - last >= args.interval:
-                state = collect(use_git=use_git)
-                last = time.time()
+                last = None
 
             h, w = scr.getmaxyx()
             scr.erase()
@@ -305,6 +485,13 @@ def run_curses(args):
             except curses.error:
                 pass
             scr.refresh()
+
+            # Collect AFTER painting, so the frame above is already on screen
+            # while this blocks.
+            if last is None or time.time() - last >= args.interval:
+                state = collect(use_git=use_git)
+                last = time.time()
+
             time.sleep(0.1)
 
     try:

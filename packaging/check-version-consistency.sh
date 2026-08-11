@@ -67,8 +67,9 @@ fi
 # --- npm package: a literal version, and the one artifact that cannot match ---
 # npm rejects a version with fewer than three components, so a two-component
 # Python version has to be padded here rather than exempted. legbar's current
-# 0.1.0-alpha already has three, and "-alpha" is a legal semver prerelease, so
-# the padding is a no-op today and stays for the day a bump goes to 0.2.
+# 0.1.0 already has three, so the padding is a no-op today and stays for the
+# day a bump goes to 0.2. Canonical PEP 440 prereleases (0.2.0a1) are also
+# legal semver prereleases, so they pass through unpadded too.
 case $VERSION in
   *.*.*) NPM_WANT=$VERSION ;;
   *.*)   NPM_WANT=$VERSION.0 ;;

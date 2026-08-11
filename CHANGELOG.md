@@ -4,18 +4,20 @@ Notable changes to legbar; entries newest first.
 
 ## Versioning
 
-SemVer with dotted prereleases, matching the rest of the estate:
+Plain SemVer. `0.1.0` is the first release: the program works, both lanes render
+against real data, and calling that an alpha would understate it. A leading `0.`
+already says the API may move.
 
-- **First alpha cut:** `0.1.0-alpha` (display `v0.1.0-alpha`)
-- **Later alpha cuts:** `0.1.0-alpha.2`, `0.1.0-alpha.3`, ... (not `alpha2`)
 - **Source of truth:** `legbar.__version__`; the man page and any package
   metadata must agree with it.
 - **Tags:** `v` + the version string.
+- **If a prerelease is ever needed,** it is written in canonical PEP 440 form:
+  `0.2.0a1`, `0.2.0b1`, `0.2.0rc1` — never `-alpha`, `-alpha.2` or `alpha2`.
+  PEP 440 rewrites all three before they reach a wheel filename (`0.2.0-alpha`
+  becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
+  the same build. `release.yml` checks the normalisation on every tag.
 
-Every release increments the version, alphas included — a prerelease is exempt
-from stability guarantees, never from identity.
-
-## v0.1.0-alpha - 2026-08-09
+## v0.1.0 - 2026-08-09
 
 First cut. Both lanes render against real data on COOPER.
 

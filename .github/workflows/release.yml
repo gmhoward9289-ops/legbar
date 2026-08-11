@@ -41,7 +41,7 @@ jobs:
 
       - name: Build wheel and sdist
         run: |
-          python -m pip install --upgrade build
+          python -m pip install --upgrade build packaging
           python -m build
 
       - name: Build the .deb
@@ -56,29 +56,36 @@ jobs:
           code_version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' legbar.py)
           tag_version="${GITHUB_REF_NAME#v}"
           if [ "$code_version" != "$tag_version" ]; then
-            echo "tag $tag_version != __version__ $code_version" >&2
+            echo "::error::tag $tag_version != __version__ $code_version" >&2
             exit 1
           fi
 
       - name: Check the man page, formula and package.json match __version__
         run: packaging/check-version-consistency.sh
 
-      # PEP 440 would rewrite a non-canonical version, so the wheel filename
-      # could disagree with the tag, the .deb and the man page. This is the
-      # check that will stop the very first release of legbar as it stands:
-      # 0.1.0-alpha normalizes to 0.1.0a0, so the sdist the Homebrew formula
-      # points at would not exist under the name the formula asks for. Pick a
-      # canonical prerelease (0.1.0a1) before cutting the tag.
-      - name: Check the wheel filename matches the version
+      # PEP 440 normalises the version before it reaches the wheel filename --
+      # "0.1.0-alpha" would become "0.1.0a0", so a raw string comparison
+      # against __version__ fails on a perfectly valid prerelease while a
+      # silent rename slips past. Compare the normalisation instead, and print
+      # both so drift between the tag and what PyPI will display is visible in
+      # the log rather than discovered on the project page -- or, worse, by the
+      # Homebrew formula pointing at an sdist filename that was never built.
+      - name: Check the wheel filename matches the normalised version
         run: |
-          code_version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' legbar.py)
-          wheel_version=$(basename "$(ls dist/*.whl)" | cut -d- -f2)
-          echo "version / tag / deb / man : $code_version"
-          echo "wheel and sdist           : $wheel_version"
-          if [ "$code_version" != "$wheel_version" ]; then
-            echo "::error::PEP 440 rewrote $code_version to $wheel_version; pick a canonical version" >&2
-            exit 1
-          fi
+          python - <<'PY'
+          import pathlib, re, sys
+          from packaging.version import Version
+          code = re.search(r'^__version__ = "(.*)"', pathlib.Path("legbar.py").read_text(), re.M).group(1)
+          wheel = next(pathlib.Path("dist").glob("*.whl")).name.split("-")[1]
+          print(f"version / tag / deb / man : {code}")
+          print(f"wheel and sdist           : {wheel}   (what PyPI will display)")
+          if str(Version(code)) != wheel:
+              print(f"::error::{code} normalises to {Version(code)}, but the wheel says {wheel}")
+              sys.exit(1)
+          if code != wheel:
+              print(f"::error::PEP 440 rewrote {code} to {wheel}; the man page, formula and .deb all carry {code}, so pick a canonical version")
+              sys.exit(1)
+          PY
 
       # henhouse is imported explicitly here, not just legbar: legbar is only a
       # renderer over it, and a wheel that shipped the renderer without the
@@ -91,6 +98,20 @@ jobs:
           /tmp/v/bin/python -c "import legbar, henhouse"
           /tmp/v/bin/python -m henhouse --json --no-git > /dev/null
           test -f /tmp/v/share/man/man1/legbar.1
+
+      # The empty-fleet case is the contract legbar's CI already guards, and it
+      # has to survive packaging too: henhouse must be importable *and*
+      # runnable from the installed wheel, from a working directory that is not
+      # the checkout. Run from /tmp so nothing resolves by accident.
+      - name: Verify the installed package degrades on an empty fleet
+        env:
+          LEGBAR_SESSIONS_DIR: ${{ runner.temp }}/no-sessions
+          LEGBAR_PROJECTS_DIR: ${{ runner.temp }}/no-projects
+          LEGBAR_CURSOR_HOME: ${{ runner.temp }}/no-cursor
+        run: |
+          cd /tmp
+          /tmp/v/bin/legbar --json --no-git --no-ci > state.json
+          /tmp/v/bin/python -c "import json; d=json.load(open('state.json')); assert d['sessions']==[], d['sessions']; print('empty-fleet JSON ok')"
 
       - name: Verify the .deb installs and the man page is readable
         run: |
@@ -112,8 +133,13 @@ jobs:
         # there and upload either way, so the tag is the only step a release
         # needs.
         run: |
+          # Canonical PEP 440 prerelease spellings only -- aN / bN / rcN. The
+          # repo does not use -alpha or .beta forms precisely because they are
+          # not what ends up on the wheel.
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *a[0-9]*|*b[0-9]*|*rc[0-9]*) prerelease="--prerelease" ;; esac
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+            || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes $prerelease
           gh release upload "$GITHUB_REF_NAME" dist/* --clobber
 
   # Publishes the tagged build to PyPI via trusted publishing (OIDC): PyPI
@@ -125,6 +151,16 @@ jobs:
   # gmhoward9289-ops/legbar, workflow release.yml, environment "pypi" (create
   # the GitHub Environment too; unprotected is fine). Until then this job
   # fails alone and the rest of the release still lands.
+  #
+  # This is the ONLY PyPI upload path in the repo. PR #3 landed the same job
+  # in the same file while this branch was open; the two were merged rather
+  # than kept side by side, because two jobs uploading the same wheel would
+  # race and the loser would fail on "file already exists". The claims a
+  # PyPI Trusted Publisher matches -- repository, workflow file release.yml,
+  # environment pypi -- are identical either way, so no PyPI-side setup
+  # changes. What survives from #3 is folded into the build job above: the
+  # packaging-based PEP 440 normalisation check, the empty-fleet run against
+  # the installed wheel, and --prerelease on release creation.
   pypi:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build

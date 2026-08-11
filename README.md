@@ -22,6 +22,13 @@ cc claude-10    OP5  #---------   8% idle        Claude     >  leghorn        re
 cu c5468eb1     -                  - idle        dev        .  leghorn        #61 checks pending
 ```
 
+> **A recorded demo is coming.** The frame above is real output, captured from
+> a live fleet. The animated walkthrough its sibling tools ship
+> ([roost](https://github.com/gmhoward9289-ops/roost),
+> [leghorn](https://github.com/gmhoward9289-ops/leghorn)) lands once the
+> early bugs are shaken out — recording a tool while it is still moving
+> produces a demo that is wrong by the time anyone watches it.
+
 ## What each lane shows
 
 **SESSIONS** — every live agent on the machine. Claude Code sessions are joined
