@@ -22,7 +22,7 @@ jobs:
     #
     # 3.14 is in the matrix because it is what the primary dev box runs -- the
     # sibling repos went months testing only 3.9 and 3.13 while every local run
-    # used 3.14. macos-13 is here because macos-latest is arm64, so without it
+    # used 3.14. macos-15-intel is here because macos-latest is arm64, so without it
     # Intel Macs have no coverage.
     #
     # Windows is excluded from 3.14 on purpose: windows-curses wheels top out at
@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-13, windows-latest]
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
         python: ["3.9", "3.13", "3.14"]
         exclude:
           - os: windows-latest
