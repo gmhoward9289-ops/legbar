@@ -33,9 +33,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import time
+from pathlib import Path
 
 import henhouse
 
@@ -132,6 +134,8 @@ def collect(use_git=True, ci=True):
             "idle_secs": c["idle_secs"],
         })
 
+    mark_contested(rows)
+
     events, gh_warn = ([], "") if not ci else henhouse.github_feed()
     return {
         "sessions": sorted(rows, key=session_sort),
@@ -167,6 +171,40 @@ def wait_cell(r, width=9):
             ).ljust(width)[:width]
 
 
+def mark_contested(rows):
+    """Re-derive `contested` from the real git working copy.
+
+    henhouse.build() infers a (project, tree) pair from the path, and that
+    inference only understands directories under REPOS_ROOT. Anything else --
+    every repo under ~/dev on this machine -- collapses to project "dev" with
+    no tree, so sessions in heron-ops, swamp-ops and legbar were grouped as
+    though they shared one checkout and every one of them was flagged
+    contested. The highest-consequence signal in the tool was firing on a path
+    heuristic that happened to be wrong for the primary working root.
+
+    Git already knows the answer, so ask it: two sessions contest each other
+    only when `rev-parse --show-toplevel` resolves to the same directory. A
+    session whose cwd is not in a repo at all contests nothing.
+    """
+    roots = {}
+    for r in rows:
+        d = r.get("dir") or ""
+        if not d:
+            r["worktree"] = ""
+            continue
+        if d not in roots:
+            top = henhouse.git(Path(d), "rev-parse", "--show-toplevel") or ""
+            roots[d] = os.path.normcase(os.path.normpath(top.strip())) if top else ""
+        r["worktree"] = roots[d]
+
+    counts = {}
+    for r in rows:
+        if r.get("worktree"):
+            counts[r["worktree"]] = counts.get(r["worktree"], 0) + 1
+    for r in rows:
+        r["contested"] = counts.get(r.get("worktree") or "", 0) > 1
+
+
 def session_sort(r):
     """Attention first, then working, then by context burn descending.
 
@@ -182,6 +220,93 @@ def session_sort(r):
 # ---------------------------------------------------------------------------
 # rendering
 # ---------------------------------------------------------------------------
+
+
+ACTION_LIMIT = 5
+
+
+def actions(state):
+    """Everything wanting a human, worst consequence first.
+
+    Ranked by what going unnoticed actually costs, not by recency:
+
+      0. A contested working tree -- two or more live sessions editing one
+         checkout. This is the only item here that destroys work rather than
+         merely delaying it: two agents writing the same files overwrite each
+         other, and the loss is silent and unrecoverable. It outranks
+         everything even when it is the least urgent-looking row on screen.
+      1. A conversation waiting on you, oldest first. Costs time, not
+         integrity -- a session sat unanswered is simply not progressing.
+      2. Red CI, which is already broken and will keep being broken; it is
+         cheap to leave for ten minutes, which is exactly why it ranks last.
+
+    Returns dicts, not strings, so the ranking is testable without parsing a
+    rendered line.
+    """
+    out = []
+
+    # Contested trees, grouped -- three sessions in one checkout is ONE
+    # problem, not three rows of the same problem.
+    trees = {}
+    for r in state["sessions"]:
+        if r.get("contested"):
+            # Key on the real working copy, and name the row after it. The
+            # inferred project is "dev" for every repo under the primary
+            # working root, which would label every collision identically.
+            wt = r.get("worktree") or r.get("project") or "-"
+            trees.setdefault(wt, []).append(r.get("name") or "-")
+    for wt, names in sorted(trees.items()):
+        out.append({
+            "rank": 0, "kind": "CONTESTED",
+            "subject": os.path.basename(wt.rstrip("\\/")) or wt,
+            "detail": "%d sessions in one working copy: %s"
+                      % (len(names), ", ".join(sorted(names))),
+        })
+
+    waits = [(r.get("idle_secs") or 0, r) for r in state["sessions"]
+             if (r.get("status") or "") in henhouse.ATTENTION]
+    for secs, r in sorted(waits, reverse=True):
+        out.append({
+            "rank": 1, "kind": "WAITING",
+            "subject": r.get("name") or "-",
+            "detail": "needs your reply -- %s" % henhouse.ago(secs),
+        })
+
+    for e in state["ci"]:
+        red = e.get("state") == "failed" or e.get("checks") == "red"
+        if not red:
+            continue
+        label = (e.get("name") or e.get("workflow") or "run"
+                 if e.get("kind") == "run"
+                 else "#%s %s" % (e.get("number", "?"), e.get("title") or "pr"))
+        out.append({"rank": 2, "kind": "CI RED",
+                    "subject": e.get("repo") or "-", "detail": label})
+
+    return out
+
+
+def action_lines(state, width):
+    items = actions(state)
+    if not items:
+        return []
+    out = ["NEEDS YOU", "-" * min(width, 9)]
+    for it in items[:ACTION_LIMIT]:
+        # Two markers for the destructive class, one for the merely blocked --
+        # legible without colour, which a terminal may not have.
+        mark = "!!" if it["rank"] == 0 else (" !" if it["rank"] == 1 else "  ")
+        out.append(clip("%s %-10s %-16s %s"
+                        % (mark, it["kind"], clip(it["subject"], 16),
+                           it["detail"]), width))
+    if len(items) > ACTION_LIMIT:
+        # Never truncate silently: a hidden contested tree is the exact thing
+        # this section exists to stop happening.
+        out.append(clip("   ... and %d more (%d contested, %d waiting, %d ci)"
+                        % (len(items) - ACTION_LIMIT,
+                           sum(1 for i in items if i["rank"] == 0),
+                           sum(1 for i in items if i["rank"] == 1),
+                           sum(1 for i in items if i["rank"] == 2)), width))
+    out.append("")
+    return out
 
 
 def header(state, width):
@@ -289,8 +414,13 @@ def ci_lines(state, width):
 
 def render(state, width):
     """Two panes side by side, or stacked when the terminal is too narrow."""
+    # The action band spans the full width above both panes, deliberately: it
+    # is the one thing worth reading before anything else, and putting it in a
+    # column would make it compete with the pane beside it.
+    band = action_lines(state, width)
+
     if width < MIN_SPLIT:
-        lines = [header(state, width), ""]
+        lines = [header(state, width), ""] + band
         lines += session_lines(state, width) + [""] + ci_lines(state, width)
         return lines
 
@@ -299,7 +429,7 @@ def render(state, width):
     left = session_lines(state, left_w)
     right = ci_lines(state, right_w)
 
-    lines = [header(state, width), ""]
+    lines = [header(state, width), ""] + band
     for i in range(max(len(left), len(right))):
         l = left[i] if i < len(left) else ""
         r = right[i] if i < len(right) else ""

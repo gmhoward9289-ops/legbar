@@ -18,7 +18,7 @@ def session(**kw):
         "dir": "", "project": "proj", "tree": "", "branch": "", "task": "",
         "status": "idle", "context_pct": None, "model": None,
         "burn_tokens": None, "subagents": 0, "contested": False, "git": None,
-        "idle_secs": None,
+        "idle_secs": None, "worktree": "",
     }
     row.update(kw)
     return row
@@ -114,6 +114,70 @@ class WaitState(unittest.TestCase):
             session(status=henhouse.ATTENTION[0], idle_secs=99999),
         )}
         self.assertEqual(len(widths), 1, widths)
+
+
+class Actions(unittest.TestCase):
+    """The NEEDS YOU band: what gets surfaced, and in what order."""
+
+    def state(self, sessions=None, ci=None):
+        return {"sessions": sessions or [], "ci": ci or [], "warn": "",
+                "gh_warn": ""}
+
+    def test_contested_outranks_waiting_which_outranks_ci(self):
+        # Ordered by what going unnoticed costs. A contested tree is the only
+        # one that destroys work rather than delaying it, so it leads even
+        # when it looks least urgent.
+        st = self.state(
+            sessions=[session(status=henhouse.ATTENTION[0], idle_secs=900),
+                      session(name="a", contested=True, worktree="/w/proj"),
+                      session(name="b", contested=True, worktree="/w/proj")],
+            ci=[{"kind": "run", "state": "failed", "repo": "r", "ts": 0}])
+        kinds = [i["kind"] for i in legbar.actions(st)]
+        self.assertEqual(kinds[0], "CONTESTED")
+        self.assertEqual(kinds[1], "WAITING")
+        self.assertEqual(kinds[-1], "CI RED")
+
+    def test_one_contested_tree_is_one_row_not_one_per_session(self):
+        st = self.state(sessions=[
+            session(name=n, contested=True, worktree="/w/proj")
+            for n in ("a", "b", "c")])
+        items = [i for i in legbar.actions(st) if i["kind"] == "CONTESTED"]
+        self.assertEqual(len(items), 1)
+        self.assertIn("3 sessions", items[0]["detail"])
+        for n in ("a", "b", "c"):
+            self.assertIn(n, items[0]["detail"])
+
+    def test_separate_working_copies_are_separate_rows(self):
+        st = self.state(sessions=[
+            session(name="a", contested=True, worktree="/w/one"),
+            session(name="b", contested=True, worktree="/w/one"),
+            session(name="c", contested=True, worktree="/w/two"),
+            session(name="d", contested=True, worktree="/w/two")])
+        items = [i for i in legbar.actions(st) if i["kind"] == "CONTESTED"]
+        self.assertEqual(len(items), 2)
+        self.assertEqual({i["subject"] for i in items}, {"one", "two"})
+
+    def test_waiting_is_oldest_first(self):
+        st = self.state(sessions=[
+            session(name="new", status=henhouse.ATTENTION[0], idle_secs=5),
+            session(name="old", status=henhouse.ATTENTION[0], idle_secs=900)])
+        waits = [i["subject"] for i in legbar.actions(st) if i["kind"] == "WAITING"]
+        self.assertEqual(waits, ["old", "new"])
+
+    def test_nothing_to_action_draws_no_band(self):
+        # An empty "NEEDS YOU" heading is worse than no heading: it occupies
+        # the most valuable space on screen to say nothing.
+        self.assertEqual(legbar.action_lines(self.state([session()]), 200), [])
+
+    def test_overflow_says_what_it_hid(self):
+        # Silent truncation here would hide the exact thing this band exists
+        # to surface.
+        st = self.state(sessions=[
+            session(name="s%d" % i, status=henhouse.ATTENTION[0], idle_secs=i)
+            for i in range(legbar.ACTION_LIMIT + 4)])
+        text = "\n".join(legbar.action_lines(st, 200))
+        self.assertIn("and 4 more", text)
+        self.assertIn("waiting", text)
 
 
 class Layout(unittest.TestCase):
