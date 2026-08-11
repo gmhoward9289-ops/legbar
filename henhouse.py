@@ -165,6 +165,20 @@ WRITE_TOOLS = ("Write", "Edit", "NotebookEdit")
 # A turn is "live" if the transcript was touched this recently.
 WORKING_SECS = 90
 
+# Subagent liveness. Both thresholds come from roost, and the gap between them
+# is the point: a subagent has no pid of its own -- it runs inside its parent's
+# process -- so mtime is the only evidence there is.
+#
+# ACTIVE is deliberately much tighter than WORKING_SECS. A parent session may
+# legitimately sit quiet for a minute while the human reads; a subagent that has
+# been handed a task is either writing to its transcript or it has finished, so
+# half a minute of silence already means "not working right now".
+AGENT_ACTIVE_SECS = 30
+# RECENT is the horizon for a subagent that is no longer active but is still
+# worth counting as part of this session's fan-out -- usually the run that just
+# came back. Older than this and it is history, not the current picture.
+AGENT_RECENT_SECS = 3600
+
 
 def context_window(model):
     for prefix, size in CONTEXT_WINDOWS:
@@ -224,8 +238,69 @@ def read_tail(path):
     return records
 
 
-def summarize(records, mtime):
-    """One transcript's records -> the telemetry fields build() consumes."""
+def count_subagents(sid, now=None):
+    """(active, recent) subagent transcripts for one session id.
+
+    Subagents run inside their parent's process, so there is no pid to probe and
+    nothing in SESSIONS_DIR to join against -- a fleet view built on the pid join
+    alone is blind to every one of them, which is why this field read 0 forever.
+    What they do leave is a transcript, one level deeper than the session's own:
+
+        projects/<slug>/<parentSessionId>/subagents/agent-<id>.jsonl
+
+    The parent session id names the directory, so the join is a path lookup
+    rather than a search. mtime is then the only liveness evidence available:
+    active means the file moved within AGENT_ACTIVE_SECS, recent means within
+    AGENT_RECENT_SECS.
+
+    roost additionally gates on whether the parent process is still alive -- a
+    subagent whose parent has exited is an "orphan" however fresh its transcript
+    looks, because nothing can still be writing to it. Here that gate is already
+    closed upstream: load_sessions() only yields sessions whose pid is alive, so
+    every sid reaching this function has a live parent by construction.
+
+    The slug is unknown (it encodes the session's cwd, which can change), so
+    every project directory is checked for a child named sid. That is one
+    listdir plus a direct is_dir() probe -- no recursive walk.
+    """
+    if not sid or not PROJECTS_DIR.is_dir():
+        return 0, 0
+    now = time.time() if now is None else now
+    active = recent = 0
+    try:
+        projects = list(PROJECTS_DIR.iterdir())
+    except OSError:
+        return 0, 0
+    for proj in projects:
+        subs = proj / sid / "subagents"
+        if not subs.is_dir():
+            continue
+        try:
+            entries = list(subs.iterdir())
+        except OSError:
+            continue
+        for f in entries:
+            if not (f.name.startswith("agent-") and f.suffix == ".jsonl"):
+                continue
+            try:
+                age = now - f.stat().st_mtime
+            except OSError:
+                continue
+            if age <= AGENT_ACTIVE_SECS:
+                active += 1
+            if age <= AGENT_RECENT_SECS:
+                recent += 1
+    return active, recent
+
+
+def summarize(records, mtime, sid=None, now=None):
+    """One transcript's records -> the telemetry fields build() consumes.
+
+    sid is the session's own id, used only to find its subagents; without it the
+    subagent counts are 0, which is what a caller with no sid should get rather
+    than a guess.
+    """
+    now = time.time() if now is None else now
     model = None
     context_tokens = None
     burn = 0
@@ -269,7 +344,7 @@ def summarize(records, mtime):
                 # split_path and the INFRA filter both expect POSIX separators.
                 files[target.replace("\\", "/")] = True
 
-    idle = max(0.0, time.time() - mtime)
+    idle = max(0.0, now - mtime)
     if idle < WORKING_SECS:
         status = "working" if (last_role == "user" or last_had_tool) else "needsinput"
     elif last_role == "assistant" and not last_had_tool:
@@ -280,6 +355,8 @@ def summarize(records, mtime):
     pct = None
     if context_tokens:
         pct = 100.0 * context_tokens / context_window(model)
+
+    active_agents, recent_agents = count_subagents(sid, now)
 
     return {
         "status": status,
@@ -297,7 +374,14 @@ def summarize(records, mtime):
         # equivalent derived from token counts, which is unrelated to a flat
         # subscription -- a number that reads as money but never was.
         "cost_usd": None,
-        "active_subagents": 0,
+        # Was hardcoded 0, which made a session running five subagents look
+        # identical to one running none -- and the fan-out is usually the whole
+        # reason the session's context is climbing.
+        "active_subagents": active_agents,
+        # Fan-out that has come back but not yet aged out. Kept alongside the
+        # active count so "0 working, 3 finished in the last hour" and "nothing
+        # ever ran here" stay distinguishable.
+        "recent_subagents": recent_agents,
         "estimate": {"verified": True},
     }
 
@@ -318,7 +402,7 @@ def load_transcripts(sessions):
         except OSError:
             missing += 1
             continue
-        telemetry[pid] = summarize(read_tail(path), mtime)
+        telemetry[pid] = summarize(read_tail(path), mtime, sid)
     warn = None
     if missing and not telemetry:
         warn = "no transcripts found for %d live session(s)" % missing
@@ -336,15 +420,37 @@ def load_registry():
 
 
 def alive(pid):
-    # os.kill(pid, 0) is a liveness probe on POSIX and a loaded gun on Windows:
-    # CPython routes any signal other than CTRL_C_EVENT/CTRL_BREAK_EVENT to
-    # TerminateProcess, so the probe would kill every session it asked about.
+    """True if the process exists. os.kill(pid, 0) is POSIX-only.
+
+    On Windows it is not merely unsupported, it is a loaded gun: CPython routes
+    any signal other than CTRL_C_EVENT/CTRL_BREAK_EVENT to TerminateProcess, so
+    the "probe" would kill every session it asked about.
+
+    The Windows answer used to be one `tasklist` subprocess per pid per refresh,
+    with a 10s timeout each. That is a process spawn and a full process-table
+    scan to answer a question the kernel can answer with a handle open/close, and
+    at a dozen sessions it is what put a floor under the refresh interval.
+    OpenProcess(SYNCHRONIZE) is the same question asked directly -- microseconds,
+    no subprocess, no timeout to tune.
+
+    Two semantics worth knowing, both inherited from the handle model rather
+    than chosen here:
+      * A process that has exited but still has an open handle held somewhere
+        (its parent has not reaped it) can still be opened, so it reads alive
+        until the last handle closes. tasklist would already call it gone.
+      * A process owned by another user can fail to open for want of rights,
+        and reads as gone. Sessions in SESSIONS_DIR are this user's own, so
+        neither case arises on the path that matters.
+    """
     if sys.platform == "win32":
-        out = subprocess.run(
-            ("tasklist", "/FI", "PID eq %d" % pid, "/NH", "/FO", "CSV"),
-            capture_output=True, text=True, timeout=10,
-        )
-        return ('"%d"' % pid) in out.stdout
+        import ctypes
+
+        SYNCHRONIZE = 0x00100000
+        h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, int(pid))
+        if h:
+            ctypes.windll.kernel32.CloseHandle(h)
+            return True
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -947,6 +1053,7 @@ def build(telemetry, claims, occupancy, sessions, use_git=True):
             "context_pct": t.get("context_pct"),
             "cost_usd": t.get("cost_usd"),
             "subagents": t.get("active_subagents") or 0,
+            "subagents_recent": t.get("recent_subagents") or 0,
             "verified": ((t.get("estimate") or {}).get("verified")),
             "contested": False,
             "git": None,
