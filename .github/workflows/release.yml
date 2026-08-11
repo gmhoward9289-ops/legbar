@@ -16,10 +16,26 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # A dispatch builds and verifies; it cannot reach PyPI, npm, the Homebrew
+  # tap or a GitHub Release. Every one of those is gated on a *pushed* tag --
+  # `github.event_name == 'push'` as well as the ref -- because dispatch lets
+  # you pick any ref, including an existing tag, so gating on the ref alone
+  # would leave a button that publishes for real.
+  #
+  # There is deliberately no dry_run input. An earlier draft had one, defaulting
+  # to true, which nothing read: dispatching against an existing tag would have
+  # published to PyPI for real with the box ticked. A checkbox that lies about
+  # publishing is worse than no checkbox, and PyPI has no undo.
+  #
+  # The two inputs that do exist are read, and each says plainly what it does.
+  # publish_apt_repo is the one dispatch path that writes anywhere, and it is
+  # named for it: it re-publishes the current .deb to the gh-pages apt repo and
+  # touches nothing else. That is a git branch -- revertible -- which is why it
+  # is allowed where a PyPI upload is not.
   workflow_dispatch:
     inputs:
       publish_apt_repo:
-        description: Run the apt-repo job even without a tag (re-publish the current version, without touching PyPI or npm)
+        description: Run the apt-repo job even without a tag (re-publish the current version to the gh-pages apt repo, without touching PyPI, npm, the tap or a release)
         type: boolean
         default: false
       npm_probe:
@@ -124,14 +140,18 @@ jobs:
           name: dist
           path: dist/*
 
+      # Pushing a tag does not create a GitHub Release, so uploading straight
+      # to one fails on a plain `git push --tags`. Create it if it is not there
+      # and upload either way, so the tag is the only step a release needs.
+      #
+      # This and every publish job below require a *pushed* tag, not merely a
+      # tag ref: workflow_dispatch lets you pick any ref, including an existing
+      # tag, and neither creating a release nor publishing to PyPI, npm or the
+      # tap should ever be reachable from a button.
       - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-        # Pushing a tag does not create a GitHub Release, so uploading straight
-        # to one fails on a plain `git push --tags`. Create it if it is not
-        # there and upload either way, so the tag is the only step a release
-        # needs.
         run: |
           # Canonical PEP 440 prerelease spellings only -- aN / bN / rcN. The
           # repo does not use -alpha or .beta forms precisely because they are
@@ -162,7 +182,7 @@ jobs:
   # packaging-based PEP 440 normalisation check, the empty-fleet run against
   # the installed wheel, and --prerelease on release creation.
   pypi:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
@@ -187,8 +207,12 @@ jobs:
   # GitHub Actions pointing at gmhoward9289-ops/legbar, workflow file
   # release.yml, environment "npm" (create that GitHub Environment here too).
   # Until that's registered, this job fails alone; PyPI and apt still publish.
+  #
+  # The probe path is the only way a dispatch reaches this job, and it runs
+  # `npm publish --dry-run` only -- see the step gates below. A real publish
+  # needs a pushed tag, same as pypi.
   npm:
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.npm_probe
+    if: (startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push') || inputs.npm_probe
     needs: build
     runs-on: ubuntu-latest
     environment: npm
@@ -263,8 +287,11 @@ jobs:
         if: inputs.npm_probe
         run: npm publish --dry-run
 
+      # Belt and braces: the job gate above already requires a pushed tag for
+      # any non-probe run, but this is the step that actually writes to the
+      # registry, so it restates the condition rather than inheriting it.
       - name: Publish
-        if: ${{ !inputs.npm_probe }}
+        if: ${{ !inputs.npm_probe && startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push' }}
         run: npm publish
 
   # Publishes the .deb into a real, signed apt repo hosted on this repo's
@@ -292,7 +319,7 @@ jobs:
   # separately -- this job only ever updates it, never creates it) and GitHub
   # Pages to be enabled for the repo pointed at that branch.
   apt-repo:
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_apt_repo
+    if: (startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push') || inputs.publish_apt_repo
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -400,7 +427,7 @@ jobs:
   # build time, and henhouse.py comes along automatically since legbar.py
   # imports it directly (no --add-data needed for a sibling module).
   windows-exe:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
     needs: build
     runs-on: windows-latest
     steps:
@@ -443,7 +470,7 @@ jobs:
   # gmhoward9289-ops/homebrew-tap with Contents: Read and write. The default
   # GITHUB_TOKEN only carries permission inside this repo, not a second one.
   homebrew-tap:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     steps:
