@@ -1,0 +1,107 @@
+.TH LEGBAR 1 "August 2026" "legbar 0.1.0-alpha" "User Commands"
+.SH NAME
+legbar \- one screen for the whole fleet: live agent sessions beside GitHub CI
+.SH SYNOPSIS
+.B legbar
+[\fB\-1\fR]
+[\fB\-\-json\fR]
+[\fB\-\-no\-git\fR]
+[\fB\-\-no\-ci\fR]
+[\fB\-i\fR \fISECS\fR]
+.SH DESCRIPTION
+.B legbar
+is a full-screen curses view that puts both fleet lanes on one canvas. The
+SESSIONS pane lists every live agent on the machine; the CI / PRS pane lists
+GitHub Actions runs and open pull requests across every clone, with failures
+pinned so a red build cannot scroll away.
+.PP
+Both panes are drawn from a single discovery layer,
+.BR henhouse ,
+so the two views cannot disagree about what is running.
+.BR henhouse (1)
+is a working CLI in its own right.
+.PP
+Claude Code sessions are joined by pid against the live-session markers, with
+model, context burn and status read from the session's own JSONL transcript.
+Cursor agents appear too, marked
+.BR cu .
+Their liveness is inferred rather than probed \- Cursor writes no pid to join
+against, so a row means \fIthis transcript moved recently\fR, which is a weaker
+signal and is labelled as one.
+.PP
+Read-only by construction: legbar reads transcripts and registries and runs
+.BR gh
+and read-only git plumbing. It never writes to a tree, a registry or a
+session. Every data source is optional and degrades to a labelled gap rather
+than an error \- an empty fleet renders an empty fleet, which is exactly the
+case someone is looking at when they are debugging why nothing is running.
+.PP
+The output is ASCII only, on purpose: block-drawing characters mojibake in the
+Windows console, so the context bars, pane rules and status glyphs are all
+plain ASCII.
+.SH OPTIONS
+.TP
+.BR \-1 ", " \-\-once
+Render one frame to stdout and exit. For pipes, CI logs and screenshots.
+.TP
+.B \-\-json
+Emit the joined state as JSON and exit, for piping somewhere else.
+.TP
+.B \-\-no\-git
+Skip the per-tree git probes. Toggle at runtime with \fBg\fR.
+.TP
+.B \-\-no\-ci
+Skip the gh sweep entirely. Useful offline, or when the API is slow.
+.TP
+.BR \-i ", " \-\-interval " " \fISECS\fR
+Seconds between refreshes in the full-screen view (default 5).
+.TP
+.B \-\-version
+Print the version and exit.
+.SH KEYS
+.TP
+.B q / esc
+quit
+.TP
+.B r
+refresh everything now
+.TP
+.B g
+toggle the per-tree git probes
+.SH ENVIRONMENT
+Every override is \fBLEGBAR_*\fR. The older
+.BR roost ,
+.BR leghorn
+and
+.BR ccwork
+variable names are still honoured so an existing install keeps whatever it had
+configured; the new name wins when both are set.
+.TP
+.B LEGBAR_REPOS_ROOT
+Directory the clones live under (default ~/GitHub). The CI pane asks gh about
+the ones with a github.com origin. Legacy: \fBLEGHORN_ROOT\fR.
+.TP
+.B LEGBAR_SESSIONS_DIR
+Claude Code's live-session markers, one <pid>.json per session (default
+~/.claude/sessions). Legacy: \fBCCWORK_SESSIONS_DIR\fR.
+.TP
+.B LEGBAR_PROJECTS_DIR
+Claude Code's JSONL transcripts, keyed by mangled cwd (default
+~/.claude/projects). Legacy: \fBCLAUDE_PROJECTS_DIR\fR.
+.TP
+.B LEGBAR_CURSOR_HOME
+Cursor's agent transcripts (default ~/.cursor). Legacy:
+\fBCURSOR_AGENT_HOME\fR.
+.TP
+.B LEGBAR_CURSOR_MAX_IDLE_SECS
+How far back a Cursor transcript still counts as a live agent (default 86400).
+Legacy: \fBROOST_CURSOR_MAX_IDLE_SECS\fR.
+.TP
+.B LEGBAR_BACKENDS
+Which discovery lanes run at all (default \fBclaude,cursor\fR). Legacy:
+\fBROOST_BACKENDS\fR.
+.SH SEE ALSO
+.BR gh (1),
+.BR git (1)
+.SH AUTHOR
+George M. Howard <dev@swamplink.com>
