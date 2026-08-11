@@ -9,7 +9,7 @@ Output legbar-loop.gif
 Set Shell "bash"
 Set FontSize 13
 Set Width 1500
-Set Height 700
+Set Height 460
 Set Padding 14
 
 Hide

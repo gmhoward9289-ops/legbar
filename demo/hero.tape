@@ -10,7 +10,7 @@ Output legbar-demo.gif
 Set Shell "bash"
 Set FontSize 13
 Set Width 1500
-Set Height 760
+Set Height 480
 Set Padding 14
 
 # Point legbar at the staged fleet through its own documented overrides rather

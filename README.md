@@ -22,12 +22,18 @@ cc claude-10    OP5  #---------   8% idle        Claude     >  leghorn        re
 cu c5468eb1     -                  - idle        dev        .  leghorn        #61 checks pending
 ```
 
-> **A recorded demo is coming.** The frame above is real output, captured from
-> a live fleet. The animated walkthrough its sibling tools ship
-> ([roost](https://github.com/gmhoward9289-ops/roost),
-> [leghorn](https://github.com/gmhoward9289-ops/leghorn)) lands once the
-> early bugs are shaken out — recording a tool while it is still moving
-> produces a demo that is wrong by the time anyone watches it.
+![legbar watching a fleet: two contested trees, sessions waiting on a human, and red CI that cannot scroll away](demo/legbar-demo.gif)
+
+The short ambient loop below is the same program, idling — which is how it
+spends almost all of its time:
+
+![legbar's ambient loop, context bars climbing while the CI pane holds its failures](demo/legbar-loop.gif)
+
+Both are real legbar, unmodified, reading a staged fleet — see
+[demo/](demo/) for how it is built and how to re-record. The second contested
+row is the one worth looking at: a Claude session and a **Cursor agent** in the
+same working copy. Cursor writes no session marker and no claim, so a dashboard
+reading only Claude's session directory cannot see that collision at all.
 
 ## What each lane shows
 
