@@ -44,6 +44,16 @@ legbar = "legbar:main"
 path = "legbar.py"
 
 # henhouse.py is the discovery layer legbar imports; the two ship together in
-# every channel because legbar is only a renderer.
+# every channel (wheel, deb, brew libexec, npm) because legbar is only a
+# renderer.
 [tool.hatch.build.targets.wheel]
 only-include = ["legbar.py", "henhouse.py"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"legbar.1" = "share/man/man1/legbar.1"
+
+# The sdist is not just a PyPI artifact here: it is the tarball the Homebrew
+# formula downloads, so it has to carry the man page the formula installs and
+# the packaging scripts a rebuild needs.
+[tool.hatch.build.targets.sdist]
+include = ["legbar.py", "henhouse.py", "legbar.1", "README.md", "LICENSE", "tests/", "packaging/"]

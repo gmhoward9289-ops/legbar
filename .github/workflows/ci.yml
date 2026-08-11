@@ -118,6 +118,13 @@ jobs:
           print("stdlib-only: ok")
           PY
 
+      # The man page, package.json and the Homebrew formula all embed the
+      # version as literal text. Checked here so drift fails on the PR that
+      # caused it, not at release time when a stale formula would ship a
+      # tarball that agrees with its own wrong version assertion.
+      - name: Assert every artifact agrees on __version__
+        run: bash packaging/check-version-consistency.sh
+
       - name: Assert the output stays ASCII
         # Block-drawing characters mojibake in the Windows console. This is a
         # promise the README makes and the tests assert per-line; this catches

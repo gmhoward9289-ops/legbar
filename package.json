@@ -1,0 +1,45 @@
+{
+  "name": "legbar",
+  "version": "0.1.0",
+  "description": "One screen for the whole fleet: live agent sessions beside GitHub CI",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "cursor",
+    "tui",
+    "dashboard",
+    "monitoring",
+    "agents",
+    "ci"
+  ],
+  "homepage": "https://github.com/gmhoward9289-ops/legbar#readme",
+  "bugs": {
+    "url": "https://github.com/gmhoward9289-ops/legbar/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gmhoward9289-ops/legbar.git"
+  },
+  "license": "MIT",
+  "author": "George M. Howard <dev@swamplink.com>",
+  "bin": {
+    "legbar": "bin/legbar.js"
+  },
+  "man": [
+    "./legbar.1"
+  ],
+  "files": [
+    "bin/legbar.js",
+    "legbar.py",
+    "henhouse.py",
+    "legbar.1"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "preferGlobal": true
+}
