@@ -14,12 +14,15 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # Build and verify only. Every publishing step below is gated on the ref
+  # being a tag, and a manual run against a branch is not one -- so a dispatch
+  # exercises the whole build path and publishes nothing.
+  #
+  # There is deliberately no dry_run input. An earlier draft had one, defaulting
+  # to true, which nothing read: dispatching against an existing tag would have
+  # published to PyPI for real with the box ticked. A checkbox that lies about
+  # publishing is worse than no checkbox, and PyPI has no undo.
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Build and verify only -- publishes nothing, attaches nothing.
-        type: boolean
-        default: true
 
 permissions:
   contents: write
@@ -104,8 +107,12 @@ jobs:
       # Pushing a tag does not create a GitHub Release, so uploading straight
       # to one fails on a plain `git push --tags`. Create it if it is not there
       # and upload either way, so the tag is the only step a release needs.
+      # Both this and the pypi job below require a *pushed* tag, not merely a
+      # tag ref: workflow_dispatch lets you pick any ref, including an existing
+      # tag, and neither creating a release nor publishing to PyPI should ever
+      # be reachable from a button.
       - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -128,7 +135,7 @@ jobs:
   # environment "pypi". Until that exists this job fails alone -- the release
   # itself, and the artifacts attached to it, still land.
   pypi:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
