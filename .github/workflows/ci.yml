@@ -1,0 +1,134 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # legbar claims 3.9+ on macOS, Linux, and Windows. curses is stdlib on the
+    # first two; Windows gets it from the windows-curses wheel (declared in
+    # pyproject.toml, platform-gated), which is why this job installs it
+    # explicitly rather than relying on the package install step alone.
+    #
+    # 3.14 is in the matrix because it is what the primary dev box runs -- the
+    # sibling repos went months testing only 3.9 and 3.13 while every local run
+    # used 3.14. macos-13 is here because macos-latest is arm64, so without it
+    # Intel Macs have no coverage.
+    #
+    # Windows is excluded from 3.14 on purpose: windows-curses wheels top out at
+    # 3.13, so that leg would fail on dependency resolution rather than on
+    # anything in this repo. Drop the exclusion once upstream ships a wheel.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-13, windows-latest]
+        python: ["3.9", "3.13", "3.14"]
+        exclude:
+          - os: windows-latest
+            python: "3.14"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install windows-curses
+        if: runner.os == 'Windows'
+        run: pip install windows-curses
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -t . -v
+
+      # Everything here must work on a box with no Claude Code, no sessions, no
+      # Cursor install and no gh auth -- degradation is the contract under test.
+      # A fleet dashboard that crashes on an empty fleet is worse than useless,
+      # because the empty case is exactly when someone is debugging why nothing
+      # is running.
+      - name: Smoke test with nothing running
+        shell: bash
+        env:
+          LEGBAR_SESSIONS_DIR: ${{ runner.temp }}/no-sessions
+          LEGBAR_PROJECTS_DIR: ${{ runner.temp }}/no-projects
+          LEGBAR_CURSOR_HOME: ${{ runner.temp }}/no-cursor
+        run: |
+          python legbar.py --version
+          python legbar.py --help > /dev/null
+          python legbar.py --once --no-git --no-ci
+          # Workspace-relative, not /tmp: on the Windows runner bash writes
+          # /tmp into Git Bash's temp while Python reads it as C:\tmp, so the
+          # two disagree and the read fails on that leg alone.
+          python legbar.py --json --no-git --no-ci > state.json
+          python -c "import json; d=json.load(open('state.json')); assert d['sessions']==[], d['sessions']; print('empty-fleet JSON ok')"
+
+      # henhouse is a working CLI in its own right, and legbar is only a
+      # renderer over it -- so it gets its own smoke test rather than being
+      # covered incidentally.
+      - name: Smoke test henhouse
+        shell: bash
+        env:
+          LEGBAR_SESSIONS_DIR: ${{ runner.temp }}/no-sessions
+          LEGBAR_PROJECTS_DIR: ${{ runner.temp }}/no-projects
+        run: python henhouse.py --no-git
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      # Stdlib-only is a promise this repo makes in its README and pyproject,
+      # and the sibling repos enforce it the same way: the only third-party
+      # import allowed anywhere is windows-curses, and only behind a platform
+      # guard. A dependency that sneaks in is a dependency someone's locked-down
+      # box will not have.
+      - name: Assert stdlib-only
+        run: |
+          python - <<'PY'
+          import ast, sys, pathlib
+          ALLOWED = {"henhouse", "legbar", "curses", "_curses"}
+          bad = []
+          for f in ("legbar.py", "henhouse.py"):
+              tree = ast.parse(pathlib.Path(f).read_text(encoding="utf-8"))
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      names = [a.name.split(".")[0] for a in node.names]
+                  elif isinstance(node, ast.ImportFrom):
+                      names = [(node.module or "").split(".")[0]]
+                  else:
+                      continue
+                  for n in names:
+                      if n and n not in ALLOWED and n not in sys.stdlib_module_names:
+                          bad.append(f"{f}: {n}")
+          if bad:
+              print("non-stdlib imports found:", *bad, sep="\n  ")
+              raise SystemExit(1)
+          print("stdlib-only: ok")
+          PY
+
+      - name: Assert the output stays ASCII
+        # Block-drawing characters mojibake in the Windows console. This is a
+        # promise the README makes and the tests assert per-line; this catches
+        # a stray glyph landing in a source literal that no test happens to
+        # render.
+        run: |
+          python - <<'PY'
+          import pathlib
+          for f in ("legbar.py", "henhouse.py"):
+              for i, line in enumerate(pathlib.Path(f).read_text(encoding="utf-8").splitlines(), 1):
+                  if not line.isascii():
+                      raise SystemExit(f"{f}:{i} non-ASCII: {line.strip()[:60]}")
+          print("ascii-only: ok")
+          PY

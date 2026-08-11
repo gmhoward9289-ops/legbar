@@ -22,7 +22,14 @@ classifiers = [
 # Standard library only, on purpose: this is a tool you leave running on a
 # machine you are already debugging, and a dependency tree is one more thing
 # that can be the reason it will not start.
-dependencies = []
+#
+# The one exception is Windows, where `curses` is not in the stdlib at all.
+# windows-curses is a drop-in backed by PDCurses. Platform-gated, so macOS and
+# Linux still install with nothing. Its wheels currently top out at 3.13, so a
+# Windows install on 3.14 will fail to resolve until upstream catches up --
+# that is a windows-curses gap, not something requires-python should cap here,
+# since capping would also needlessly restrict macOS and Linux.
+dependencies = ["windows-curses; sys_platform == 'win32'"]
 
 [project.urls]
 Homepage = "https://github.com/gmhoward9289-ops/legbar"
