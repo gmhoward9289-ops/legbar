@@ -109,8 +109,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Canonical PEP 440 prerelease spellings only -- aN / bN / rcN. The
+          # repo does not use -alpha or .beta forms precisely because they are
+          # not what ends up on the wheel.
           prerelease=""
-          case "$GITHUB_REF_NAME" in *a*|*alpha*|*b*|*beta*|*rc*) prerelease="--prerelease" ;; esac
+          case "$GITHUB_REF_NAME" in *a[0-9]*|*b[0-9]*|*rc[0-9]*) prerelease="--prerelease" ;; esac
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes $prerelease
           gh release upload "$GITHUB_REF_NAME" dist/* --clobber
