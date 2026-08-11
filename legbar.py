@@ -108,7 +108,7 @@ def collect(use_git=True, ci=True):
         r["source"] = "claude"
         r["model"] = t.get("model")
         r["burn_tokens"] = t.get("burn_tokens")
-        r["idle_secs"] = None
+        r["idle_secs"] = t.get("idle_secs")
 
     for c in henhouse.load_cursor_sessions():
         project, tree = henhouse.split_path(c["cwd"])
@@ -141,6 +141,32 @@ def collect(use_git=True, ci=True):
     }
 
 
+def waiting_on(r):
+    """(who, seconds) -- which side of the conversation is pending, and for
+    how long. ("", None) when nothing is outstanding.
+
+    Context percentage says how full a session is, which is a resource
+    question. This is the different, more urgent question: is anyone blocked,
+    and on whom. `needsinput` means the model has answered and is waiting on a
+    human; `working` means the human has asked and is waiting on the model.
+    """
+    status = (r.get("status") or "").lower()
+    secs = r.get("idle_secs")
+    if status in henhouse.ATTENTION:
+        return "you", secs
+    if status == "working":
+        return "cc" if r.get("source") == "claude" else "cu", secs
+    return "", None
+
+
+def wait_cell(r, width=9):
+    who, secs = waiting_on(r)
+    if not who:
+        return "-".ljust(width)
+    return ("%s %s" % (who, henhouse.ago(secs) if secs is not None else "?")
+            ).ljust(width)[:width]
+
+
 def session_sort(r):
     """Attention first, then working, then by context burn descending.
 
@@ -167,11 +193,19 @@ def header(state, width):
               if e.get("state") == "failed" or e.get("checks") == "red")
     held = sum(r.get("burn_tokens") or 0 for r in state["sessions"])
 
+    # Longest-waiting first: "3 need you (12m)" is a different call to action
+    # from "3 need you (4s)", and the count alone cannot tell them apart.
+    waits = sorted((r.get("idle_secs") or 0) for r in state["sessions"]
+                   if (r.get("status") or "") in henhouse.ATTENTION)
+    contested = sum(1 for r in state["sessions"] if r.get("contested"))
+
     bits = ["%s  %d session%s" % (NAME, n, "" if n == 1 else "s")]
     if cursor_n:
         bits.append("%d cursor" % cursor_n)
     if attention:
-        bits.append("%d need input" % attention)
+        bits.append("%d need you (%s)" % (attention, henhouse.ago(waits[-1])))
+    if contested:
+        bits.append("%d contested" % contested)
     if red:
         bits.append("%d ci red" % red)
     if held:
@@ -208,14 +242,20 @@ def session_lines(state, width):
         src = "cu" if r["source"] == "cursor" else "cc"
         pct = r.get("context_pct")
         pct_s = "%3d%%" % round(pct) if pct is not None else "   -"
-        line = "%-2s %-12s %-4s %s %s %-11s %s" % (
+        # A contested tree is two live sessions editing one working copy, which
+        # is the collision that actually loses work. It outranks anything else
+        # on the row, so it gets the leading glyph rather than a column.
+        flag = "!" if r.get("contested") else " "
+        line = "%s%-2s %-12s %-4s %s %s %-9s %-11s %s" % (
+            flag,
             src,
             clip(r.get("name") or "-", 12),
             short_model(r.get("model")),
             bar(pct),
             pct_s,
+            wait_cell(r),
             clip(r.get("status") or "-", 11),
-            clip(r.get("task") or r.get("project") or "", max(0, width - 52)),
+            clip(r.get("task") or r.get("project") or "", max(0, width - 63)),
         )
         out.append(clip(line, width))
     if state.get("warn"):

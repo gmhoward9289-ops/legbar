@@ -78,6 +78,44 @@ class Sorting(unittest.TestCase):
         sorted(rows, key=legbar.session_sort)
 
 
+class WaitState(unittest.TestCase):
+    """Which side of a conversation is pending, and for how long."""
+
+    def test_needsinput_is_waiting_on_the_human(self):
+        who, secs = legbar.waiting_on(
+            session(status=henhouse.ATTENTION[0], idle_secs=125))
+        self.assertEqual(who, "you")
+        self.assertEqual(secs, 125)
+
+    def test_working_is_waiting_on_the_model(self):
+        self.assertEqual(legbar.waiting_on(
+            session(status="working", idle_secs=3))[0], "cc")
+        self.assertEqual(legbar.waiting_on(
+            session(status="working", source="cursor", idle_secs=3))[0], "cu")
+
+    def test_idle_is_waiting_on_nobody(self):
+        self.assertEqual(legbar.waiting_on(session(status="idle")), ("", None))
+
+    def test_the_cell_shows_direction_and_duration(self):
+        cell = legbar.wait_cell(session(status=henhouse.ATTENTION[0],
+                                        idle_secs=125))
+        self.assertIn("you", cell)
+        self.assertIn("2m", cell)
+
+    def test_a_missing_duration_does_not_crash_the_cell(self):
+        # Cursor rows can arrive without one.
+        self.assertIn("?", legbar.wait_cell(
+            session(status="working", source="cursor", idle_secs=None)))
+
+    def test_the_cell_is_fixed_width_so_columns_stay_aligned(self):
+        widths = {len(legbar.wait_cell(s)) for s in (
+            session(status="idle"),
+            session(status="working", idle_secs=3),
+            session(status=henhouse.ATTENTION[0], idle_secs=99999),
+        )}
+        self.assertEqual(len(widths), 1, widths)
+
+
 class Layout(unittest.TestCase):
     def state(self, sessions=None, ci=None, **kw):
         s = {"sessions": sessions or [], "ci": ci or [], "warn": "",
@@ -137,16 +175,33 @@ class Layout(unittest.TestCase):
 
     def test_the_header_counts_what_matters(self):
         st = self.state(
-            sessions=[session(status=henhouse.ATTENTION[0]),
+            sessions=[session(status=henhouse.ATTENTION[0], idle_secs=125),
                       session(source="cursor"),
                       session(burn_tokens=125_000)],
             ci=[{"kind": "run", "state": "failed", "repo": "r", "ts": 0}])
         head = legbar.header(st, 200)
         self.assertIn("3 sessions", head)
         self.assertIn("1 cursor", head)
-        self.assertIn("1 need input", head)
+        self.assertIn("1 need you", head)
         self.assertIn("1 ci red", head)
         self.assertIn("125k held", head)
+
+    def test_the_header_ages_the_longest_wait_not_the_newest(self):
+        # "3 need you (12m)" is a different call to action from "3 need you
+        # (4s)", and a count alone cannot tell them apart.
+        st = self.state(sessions=[
+            session(status=henhouse.ATTENTION[0], idle_secs=4),
+            session(status=henhouse.ATTENTION[0], idle_secs=740),
+        ])
+        head = legbar.header(st, 200)
+        self.assertIn("2 need you", head)
+        self.assertIn("12m", head)
+
+    def test_contested_trees_are_flagged_and_counted(self):
+        st = self.state(sessions=[session(contested=True), session()])
+        text = "\n".join(legbar.render(st, 200))
+        self.assertIn("1 contested", text)
+        self.assertTrue(any(l.startswith("!") for l in text.splitlines()), text)
 
     def test_output_is_ascii_only(self):
         st = self.state(sessions=[session(context_pct=50, model="claude-opus-5")],
