@@ -199,7 +199,10 @@ def bar(pct, cells=10):
 def session_lines(state, width):
     out = ["SESSIONS", "-" * min(width, 8)]
     if not state["sessions"]:
-        out.append(clip("no live sessions", width))
+        # "collecting" and "nothing running" are different facts, and on the
+        # first frame the difference is the whole question the user has.
+        out.append(clip("collecting..." if state.get("loading")
+                        else "no live sessions", width))
         return out
     for r in state["sessions"]:
         src = "cu" if r["source"] == "cursor" else "cc"
@@ -226,7 +229,8 @@ def ci_lines(state, width):
         out.append(clip("gh unavailable: %s" % state["gh_warn"], width))
         return out
     if not state["ci"]:
-        out.append(clip("nothing running, nothing red", width))
+        out.append(clip("collecting..." if state.get("loading")
+                        else "nothing running, nothing red", width))
         return out
     for e in state["ci"]:
         if e.get("kind") == "run":
@@ -275,21 +279,27 @@ def run_curses(args):
         curses.curs_set(0)
         scr.nodelay(True)
         use_git = not args.no_git
-        state = collect(use_git=use_git)
-        last = time.time()
+
+        # Paint before collecting, not after. The first collect() runs the gh
+        # sweep, which takes tens of seconds across many clones -- collecting
+        # first leaves the terminal blank that whole time, indistinguishable
+        # from a hang. `last = None` means "draw this frame, then collect".
+        state = {"sessions": [], "ci": [], "warn": "", "gh_warn": "",
+                 "loading": True}
+        last = None
         while True:
             ch = scr.getch()
-            if ch in (ord("q"), 27):
+            # Deliberately NOT ESC (27). Windows terminals emit escape
+            # sequences at startup that PDCurses surfaces as a bare 27, so
+            # quitting on it made legbar exit before its first paint -- it
+            # looked like the program did nothing at all. q, or Ctrl-C.
+            if ch == ord("q"):
                 return
             if ch == ord("g"):
                 use_git = not use_git
-                last = 0
+                last = None
             if ch == ord("r"):
-                last = 0
-
-            if time.time() - last >= args.interval:
-                state = collect(use_git=use_git)
-                last = time.time()
+                last = None
 
             h, w = scr.getmaxyx()
             scr.erase()
@@ -305,6 +315,13 @@ def run_curses(args):
             except curses.error:
                 pass
             scr.refresh()
+
+            # Collect AFTER painting, so the frame above is already on screen
+            # while this blocks.
+            if last is None or time.time() - last >= args.interval:
+                state = collect(use_git=use_git)
+                last = time.time()
+
             time.sleep(0.1)
 
     try:

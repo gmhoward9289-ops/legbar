@@ -111,6 +111,19 @@ class Layout(unittest.TestCase):
         self.assertIn("no live sessions", text)
         self.assertIn("nothing running, nothing red", text)
 
+    def test_the_first_frame_says_collecting_not_empty(self):
+        # The first paint happens before the gh sweep, which takes tens of
+        # seconds. "collecting" and "nothing is running" are different facts,
+        # and on that first frame the difference is the whole question.
+        loading = "\n".join(legbar.render(self.state(loading=True), 200))
+        self.assertIn("collecting", loading)
+        self.assertNotIn("no live sessions", loading)
+        self.assertNotIn("nothing running", loading)
+
+        settled = "\n".join(legbar.render(self.state(), 200))
+        self.assertIn("no live sessions", settled)
+        self.assertNotIn("collecting", settled)
+
     def test_an_unreachable_gh_is_reported_not_shown_as_empty(self):
         st = self.state(gh_warn="gh not installed")
         text = "\n".join(legbar.render(st, 200))
