@@ -70,6 +70,10 @@ First cut. Both lanes render against real data on COOPER.
   and third when narrow — leghorn's third answer on the same canvas.
 - **Git probe for Cursor cwds**, so a contested Cursor checkout can show dirt
   the same way its Claude peer does.
+- **Roost-style session buckets** (`WAITING ON YOU`, `NEAR LIMIT`,
+  `WORKING NOW`, collapsed `QUIET`) and a **SUBAGENTS** panel, beside
+  leghorn's **GITHUB** + **COMMITS** panes — the union layout, not a thinner
+  flat list.
 
 ### Fixed
 - CHANGELOG no longer claims CI-by-origin dedup is missing; `github_repos()`
