@@ -47,9 +47,11 @@ NAME = "legbar"
 
 # Layout. The session lane is the wider of the two: it carries a task string,
 # which is the only free-text column on the screen. Below MIN_SPLIT the panes
-# stack instead of sitting side by side.
-SESSIONS_MIN = 62
-CI_MIN = 46
+# stack instead of sitting side by side. CI_MIN is the right column's floor
+# (CI + COMMITS share it); SESSIONS_MIN is denser than 0.1.0 because sub+git
+# cells ate ~10 columns of the task.
+SESSIONS_MIN = 72
+CI_MIN = 40
 GAP = 2
 MIN_SPLIT = SESSIONS_MIN + CI_MIN + GAP
 
@@ -131,17 +133,33 @@ def collect(use_git=True, ci=True):
             "subagents": 0,
             "contested": False,
             "git": None,
+            "git_dir": c["cwd"] or "",
             "idle_secs": c["idle_secs"],
         })
+
+    # Claude rows already got git from build(); Cursor was appended after, so
+    # probe those cwds the same way or a contested Cursor checkout would show
+    # no dirt while the Claude peer beside it did.
+    if use_git:
+        cursor_dirs = [r["git_dir"] for r in rows
+                       if r.get("source") == "cursor" and r.get("git_dir")]
+        if cursor_dirs:
+            states = henhouse.gather_git(cursor_dirs)
+            for r in rows:
+                if r.get("source") == "cursor" and r.get("git_dir"):
+                    r["git"] = states.get(r["git_dir"])
 
     mark_contested(rows)
 
     events, gh_warn = ([], "") if not ci else henhouse.github_feed()
+    commits = henhouse.commit_feed(25) if use_git else []
     return {
         "sessions": sorted(rows, key=session_sort),
         "ci": events,
+        "commits": commits,
         "warn": warn,
         "gh_warn": gh_warn,
+        "use_git": use_git,
     }
 
 
@@ -169,6 +187,39 @@ def wait_cell(r, width=9):
         return "-".ljust(width)
     return ("%s %s" % (who, henhouse.ago(secs) if secs is not None else "?")
             ).ljust(width)[:width]
+
+
+def sub_cell(r, width=2):
+    """Active subagent count, or '-' when none -- fixed width for the column."""
+    n = r.get("subagents") or 0
+    if not n:
+        return "-".ljust(width)[:width]
+    return str(n).ljust(width)[:width]
+
+
+def git_cell(r, width=6):
+    """Compact dirt+drift, matching henhouse's sigils in one short cell.
+
+    '~2^1' is two unstaged and one ahead; 'clean' when the tree is settled;
+    '-' when nothing was probed. Fixed width so the task column stays aligned.
+    """
+    g = r.get("git")
+    if not g:
+        return "-".ljust(width)[:width]
+    parts = [sigil + str(g[key])
+             for sigil, key in (("+", "staged"), ("~", "dirty"), ("?", "untracked"))
+             if g.get(key)]
+    dirt = "".join(parts) or "clean"
+    ahead, behind = g.get("ahead"), g.get("behind")
+    if ahead is None:
+        drift = ""
+    else:
+        drift = (("^%d" % ahead if ahead else "")
+                 + ("v%d" % behind if behind else ""))
+        if not drift:
+            drift = "" if parts else ""
+    text = dirt + drift
+    return text.ljust(width)[:width]
 
 
 def mark_contested(rows):
@@ -265,7 +316,7 @@ def actions(state):
 
     waits = [(r.get("idle_secs") or 0, r) for r in state["sessions"]
              if (r.get("status") or "") in henhouse.ATTENTION]
-    for secs, r in sorted(waits, reverse=True):
+    for secs, r in sorted(waits, key=lambda pair: pair[0], reverse=True):
         out.append({
             "rank": 1, "kind": "WAITING",
             "subject": r.get("name") or "-",
@@ -323,6 +374,11 @@ def header(state, width):
     waits = sorted((r.get("idle_secs") or 0) for r in state["sessions"]
                    if (r.get("status") or "") in henhouse.ATTENTION)
     contested = sum(1 for r in state["sessions"] if r.get("contested"))
+    # Count trees, not sessions -- several sessions in one dirty tree is one
+    # pile of uncommitted work.
+    dirty_trees = {r.get("worktree") or r.get("git_dir") or id(r)
+                   for r in state["sessions"] if henhouse.uncommitted(r)}
+    sub_n = sum(r.get("subagents") or 0 for r in state["sessions"])
 
     bits = ["%s  %d session%s" % (NAME, n, "" if n == 1 else "s")]
     if cursor_n:
@@ -331,6 +387,10 @@ def header(state, width):
         bits.append("%d need you (%s)" % (attention, henhouse.ago(waits[-1])))
     if contested:
         bits.append("%d contested" % contested)
+    if dirty_trees:
+        bits.append("%d uncommitted" % len(dirty_trees))
+    if sub_n:
+        bits.append("%d sub" % sub_n)
     if red:
         bits.append("%d ci red" % red)
     if held:
@@ -355,6 +415,12 @@ def bar(pct, cells=10):
     return "#" * filled + "-" * (cells - filled)
 
 
+# Fixed prefix before the free-text task: flag+src+name+model+bar+pct+wait+status
+# (+ optional sub+git). Keep in sync with session_lines().
+_SESSION_FIXED = 60
+_SESSION_FIXED_GIT = 70  # + " 3 " + " ~2^1 "
+
+
 def session_lines(state, width):
     out = ["SESSIONS", "-" * min(width, 8)]
     if not state["sessions"]:
@@ -363,6 +429,8 @@ def session_lines(state, width):
         out.append(clip("collecting..." if state.get("loading")
                         else "no live sessions", width))
         return out
+    show_git = bool(state.get("use_git", True))
+    fixed = _SESSION_FIXED_GIT if show_git else _SESSION_FIXED
     for r in state["sessions"]:
         src = "cu" if r["source"] == "cursor" else "cc"
         pct = r.get("context_pct")
@@ -371,17 +439,19 @@ def session_lines(state, width):
         # is the collision that actually loses work. It outranks anything else
         # on the row, so it gets the leading glyph rather than a column.
         flag = "!" if r.get("contested") else " "
-        line = "%s%-2s %-12s %-4s %s %s %-9s %-11s %s" % (
-            flag,
-            src,
-            clip(r.get("name") or "-", 12),
-            short_model(r.get("model")),
-            bar(pct),
-            pct_s,
-            wait_cell(r),
-            clip(r.get("status") or "-", 11),
-            clip(r.get("task") or r.get("project") or "", max(0, width - 63)),
-        )
+        task = clip(r.get("task") or r.get("project") or "",
+                    max(0, width - fixed))
+        if show_git:
+            line = "%s%-2s %-12s %-4s %s %s %-9s %-11s %s %s %s" % (
+                flag, src, clip(r.get("name") or "-", 12),
+                short_model(r.get("model")), bar(pct), pct_s, wait_cell(r),
+                clip(r.get("status") or "-", 11),
+                sub_cell(r), git_cell(r), task)
+        else:
+            line = "%s%-2s %-12s %-4s %s %s %-9s %-11s %s" % (
+                flag, src, clip(r.get("name") or "-", 12),
+                short_model(r.get("model")), bar(pct), pct_s, wait_cell(r),
+                clip(r.get("status") or "-", 11), task)
         out.append(clip(line, width))
     if state.get("warn"):
         out.append(clip("note: %s" % state["warn"], width))
@@ -412,22 +482,53 @@ def ci_lines(state, width):
     return out
 
 
+COMMIT_LIMIT = 12
+
+
+def commit_lines(state, width):
+    """Leghorn's third pane: what landed, newest first."""
+    out = ["COMMITS", "-" * min(width, 7)]
+    commits = state.get("commits") or []
+    if state.get("loading") and not commits:
+        out.append(clip("collecting...", width))
+        return out
+    if not commits:
+        out.append(clip("no commits", width))
+        return out
+    now = time.time()
+    for c in commits[:COMMIT_LIMIT]:
+        age = henhouse.ago(now - c["ts"]) if c.get("ts") else "-"
+        line = "%-4s %-10s %s" % (
+            age, clip(c.get("repo") or "-", 10),
+            clip(c.get("subject") or "", max(0, width - 16)))
+        out.append(clip(line, width))
+    return out
+
+
+def _stack_right(ci, commits):
+    """CI on top, COMMITS below, blank line between the two pane titles."""
+    return list(ci) + [""] + list(commits)
+
+
 def render(state, width):
-    """Two panes side by side, or stacked when the terminal is too narrow."""
+    """Sessions beside CI+COMMITS, or stacked when the terminal is too narrow."""
     # The action band spans the full width above both panes, deliberately: it
     # is the one thing worth reading before anything else, and putting it in a
     # column would make it compete with the pane beside it.
     band = action_lines(state, width)
+    commits = commit_lines(state, width)
 
     if width < MIN_SPLIT:
         lines = [header(state, width), ""] + band
-        lines += session_lines(state, width) + [""] + ci_lines(state, width)
+        lines += (session_lines(state, width) + [""]
+                  + ci_lines(state, width) + [""] + commits)
         return lines
 
     left_w = max(SESSIONS_MIN, width - CI_MIN - GAP)
     right_w = width - left_w - GAP
     left = session_lines(state, left_w)
-    right = ci_lines(state, right_w)
+    right = _stack_right(ci_lines(state, right_w),
+                         commit_lines(state, right_w))
 
     lines = [header(state, width), ""] + band
     for i in range(max(len(left), len(right))):
@@ -454,8 +555,8 @@ def run_curses(args):
         # sweep, which takes tens of seconds across many clones -- collecting
         # first leaves the terminal blank that whole time, indistinguishable
         # from a hang. `last = None` means "draw this frame, then collect".
-        state = {"sessions": [], "ci": [], "warn": "", "gh_warn": "",
-                 "loading": True}
+        state = {"sessions": [], "ci": [], "commits": [], "warn": "",
+                 "gh_warn": "", "loading": True, "use_git": use_git}
         last = None
         while True:
             ch = scr.getch()

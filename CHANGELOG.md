@@ -51,9 +51,26 @@ First cut. Both lanes render against real data on COOPER.
   the discovery layer.
 
 ### Known gaps
-- Worktrees of one GitHub repo are listed as separate clones, so the same run
-  and PR appear once per worktree in the CI pane. Inherited from leghorn's
-  `github_repos()`; it wants a dedup by origin.
 - leghorn and roost do not import this copy of `henhouse.py` yet — that
-  consolidation is the next step, and until it lands the drift the shared layer
-  was meant to end is only fixed on legbar's side.
+  consolidation is the next family-wide step, and until it lands the drift the
+  shared layer was meant to end is only fixed on legbar's side.
+- Cursor rows still lack model and context %: transcript JSONL on COOPER
+  carried no `usage` keys (see roost's `docs/cursor-on-disk.md`). roost reads
+  `composerHeaders` from `state.vscdb`; legbar has not ported that path yet.
+
+## Unreleased
+
+### Added
+- **Subagent and git cells on every session row.** henhouse already counted
+  active subagents and probed dirty/ahead/behind; the renderer now draws them
+  (`3`, `~2^1`, `clean`) and the header totals uncommitted trees and subagents
+  when non-zero. `--no-git` / `g` hides the git column rather than painting a
+  wall of dashes.
+- **COMMITS pane** from `henhouse.commit_feed()`, stacked under CI when wide
+  and third when narrow — leghorn's third answer on the same canvas.
+- **Git probe for Cursor cwds**, so a contested Cursor checkout can show dirt
+  the same way its Claude peer does.
+
+### Fixed
+- CHANGELOG no longer claims CI-by-origin dedup is missing; `github_repos()`
+  already collapses `-wt-*` siblings (covered by `tests/test_henhouse_github.py`).
