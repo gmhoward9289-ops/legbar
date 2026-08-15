@@ -212,8 +212,11 @@ class Layout(unittest.TestCase):
         st = self.state(sessions=[session()])
         lines = legbar.render(st, legbar.MIN_SPLIT - 1)
         text = "\n".join(lines)
-        self.assertIn("SESSIONS", text)
-        self.assertIn("CI / PRS", text)
+        # Roost buckets on the left DNA, leghorn panes below when stacked.
+        self.assertTrue("STARTING" in text or "WORKING" in text or "QUIET" in text, text)
+        self.assertIn("GITHUB", text)
+        self.assertIn("COMMITS", text)
+        self.assertIn("SUBAGENTS", text)
 
     def test_both_panes_say_something_when_empty(self):
         # An empty pane and a pane that cannot see are different facts, and a
@@ -316,9 +319,39 @@ class DensifiedSessions(unittest.TestCase):
               "ci": [], "commits": [], "warn": "", "gh_warn": "",
               "use_git": True}
         text = "\n".join(legbar.session_lines(st, 120))
+        st = {"sessions": [session(subagents=3, status="working", idle_secs=3,
+                                   context_pct=40,
+                                   git={"staged": 0, "dirty": 2, "untracked": 0,
+                                        "ahead": 1, "behind": 0},
+                                   task="fix contested")],
+              "ci": [], "commits": [], "subagents": [], "warn": "", "gh_warn": "",
+              "use_git": True}
+        text = "\n".join(legbar.session_lines(st, 120))
+        self.assertIn("WORKING NOW", text)
         self.assertIn(" 3 ", text)
         self.assertIn("~2", text)
         self.assertIn("^1", text)
+
+    def test_quiet_sessions_collapse_to_one_line(self):
+        st = {"sessions": [
+            session(name="a", status="idle", idle_secs=600, context_pct=10),
+            session(name="b", status="idle", idle_secs=900, context_pct=5),
+        ], "ci": [], "commits": [], "subagents": [], "warn": "", "gh_warn": "",
+            "use_git": True}
+        text = "\n".join(legbar.session_lines(st, 120))
+        self.assertIn("QUIET (2)", text)
+        self.assertIn("a", text)
+        self.assertIn("b", text)
+
+    def test_subagents_panel_lists_rows(self):
+        st = {"sessions": [], "ci": [], "commits": [], "warn": "", "gh_warn": "",
+              "use_git": True,
+              "subagents": [{"state": "working", "agent_id": "abc123",
+                             "parent": "heron-ops-3c", "idle_secs": 2}]}
+        text = "\n".join(legbar.subagent_lines(st, 80))
+        self.assertIn("SUBAGENTS", text)
+        self.assertIn("working", text)
+        self.assertIn("heron-ops-3c", text)
 
     def test_no_git_mode_hides_the_git_column(self):
         # A wall of dashes claiming every tree is clean is worse than silence.
@@ -362,6 +395,8 @@ class CommitsPane(unittest.TestCase):
 
     def test_narrow_terminals_stack_commits_third(self):
         st = self.state(sessions=[session()], commits=[
+        st = self.state(sessions=[session(status="working", idle_secs=3,
+                                         context_pct=10)], commits=[
             {"repo": "r", "ts": time.time(), "sha": "a", "author": "g",
              "refs": "", "subject": "s"},
         ])
@@ -370,6 +405,10 @@ class CommitsPane(unittest.TestCase):
         pos_c = text.index("CI / PRS")
         pos_m = text.index("COMMITS")
         self.assertLess(pos_s, pos_c)
+        pos_w = text.index("WORKING NOW")
+        pos_c = text.index("GITHUB")
+        pos_m = text.index("COMMITS")
+        self.assertLess(pos_w, pos_c)
         self.assertLess(pos_c, pos_m)
 
     def test_empty_commits_are_labelled_not_blank(self):
