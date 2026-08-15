@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>legbar — union TUI mockup</title>
+<style>
+  :root {
+    --bg: #0c0f0c;
+    --panel: #121612;
+    --border: #2a332a;
+    --fg: #c8d2c4;
+    --dim: #6e7a6a;
+    --accent: #b7d48a;
+    --warn: #e0b46a;
+    --bad: #e07a6a;
+    --mono: "IBM Plex Mono", "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+    --sans: "IBM Plex Sans", "Source Sans 3", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(ellipse at 20% 0%, #1a2418 0%, transparent 50%),
+      radial-gradient(ellipse at 90% 100%, #182018 0%, transparent 45%),
+      var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    min-height: 100vh;
+    padding: 2rem 1.25rem 3rem;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  h1 {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 1.35rem;
+    letter-spacing: 0.02em;
+    margin: 0 0 0.35rem;
+    color: var(--accent);
+  }
+  .lede {
+    color: var(--dim);
+    max-width: 52rem;
+    line-height: 1.45;
+    margin: 0 0 1.75rem;
+    font-size: 0.95rem;
+  }
+  .lede strong { color: var(--fg); font-weight: 600; }
+  .tabs {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+  }
+  .tab {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--dim);
+    padding: 0.45rem 0.8rem;
+    cursor: pointer;
+  }
+  .tab[aria-selected="true"] {
+    color: var(--bg);
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .panel {
+    display: none;
+    border: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .panel.active { display: block; }
+  .term-chrome {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--dim);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+  .dot.g { background: #6a9e6a; }
+  .dot.y { background: var(--warn); }
+  .dot.r { background: var(--bad); }
+  pre.term {
+    margin: 0;
+    padding: 1rem 1.1rem 1.25rem;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.35;
+    overflow-x: auto;
+    white-space: pre;
+    color: var(--fg);
+  }
+  .hi { color: var(--accent); }
+  .w { color: var(--warn); }
+  .b { color: var(--bad); }
+  .d { color: var(--dim); }
+  .notes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 0.75rem;
+    margin-top: 1.25rem;
+  }
+  .note {
+    border: 1px solid var(--border);
+    padding: 0.85rem 1rem;
+    background: rgba(18, 22, 18, 0.7);
+  }
+  .note h2 {
+    margin: 0 0 0.4rem;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .note p {
+    margin: 0;
+    font-size: 0.88rem;
+    line-height: 1.4;
+    color: var(--dim);
+  }
+  .note p span { color: var(--fg); }
+  .pick {
+    margin-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    padding-top: 1.25rem;
+  }
+  .pick h2 {
+    font-family: var(--mono);
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin: 0 0 0.75rem;
+    color: var(--fg);
+  }
+  .choices { display: flex; flex-direction: column; gap: 0.5rem; }
+  .choice {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    border: 1px solid var(--border);
+    padding: 0.75rem 0.9rem;
+    cursor: pointer;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    font: inherit;
+  }
+  .choice:hover { border-color: var(--accent); }
+  .choice.selected {
+    border-color: var(--accent);
+    background: rgba(183, 212, 138, 0.08);
+  }
+  .choice .mark {
+    font-family: var(--mono);
+    color: var(--accent);
+    min-width: 1.2rem;
+  }
+  .choice .body strong {
+    display: block;
+    font-size: 0.92rem;
+    margin-bottom: 0.15rem;
+  }
+  .choice .body span {
+    font-size: 0.82rem;
+    color: var(--dim);
+    line-height: 1.35;
+  }
+  #picked {
+    margin-top: 0.75rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--accent);
+    min-height: 1.2em;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>legbar — densified union mockup</h1>
+  <p class="lede">
+    <strong>Claude already has the data.</strong> henhouse collects model, context burn,
+    subagent counts, and git dirty/drift for every <code>cc</code> row — the renderer
+    just never draws the last two. Cursor stays thinner until we port roost’s
+    <code>composerHeaders</code> path. Toggle below: today vs proposed.
+  </p>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-panel="proposed">A · proposed union</button>
+    <button class="tab" role="tab" aria-selected="false" data-panel="today">B · today (0.1.0)</button>
+    <button class="tab" role="tab" aria-selected="false" data-panel="claude">C · Claude fields only</button>
+  </div>
+
+  <div id="proposed" class="panel active" role="tabpanel">
+    <div class="term-chrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span>legbar — proposed · 132 cols</span>
+    </div>
+<pre class="term"><span class="hi">legbar</span>  5 sessions | 1 cursor | 1 need you (12m) | 1 contested | 2 uncommitted | 3 sub | 2 ci red | 125k held | 18:37:00
+
+<span class="b">NEEDS YOU</span>
+---------
+<span class="b">!! CONTESTED  heron-ops        2 sessions in one working copy: heron-ops-3c, c5468eb1</span>
+<span class="w"> ! WAITING    swamp-ops-ad     needs your reply -- 12m</span>
+   <span class="b">CI RED</span>     roost            ci
+   <span class="b">CI RED</span>     roost            #56 ci: skip winget~
+
+SESSIONS                                                              CI / PRS
+--------                                                              --------
+<span class="b">!</span>cc heron-ops-3c FB5  ###-------  32% you 12m  needsinput  <span class="w">3</span>  <span class="w">~2^1</span>  fix contested false alarm
+ cc swamp-ops-ad OP5  ###-------  25% you 12m  needsinput  <span class="d">-</span>  <span class="w">~1</span>    draft discussions packet
+ cc heron-ops-16 FB5  #---------  10% cc 3s    working     <span class="w">2</span>  clean  survey henhouse drift
+ cc claude-10    OP5  #---------   8% -        idle        <span class="d">-</span>  <span class="d">-</span>     -
+<span class="b">!</span>cu c5468eb1     -                  - cu 40s   working     <span class="d">-</span>  <span class="d">-</span>     union TUI mockup
+                                                                      COMMITS
+                                                                      -------
+                                                                      4m  legbar   densify session rows
+                                                                      9m  roost    fix cursor idle fixture
+                                                                     25m  leghorn  docs: model claim
+                                                                     41m  swamp-ops enqueue backup job
+
+<span class="d">q quit  g git  r refresh</span></pre>
+  </div>
+
+  <div id="today" class="panel" role="tabpanel">
+    <div class="term-chrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span>legbar — shipped 0.1.0 · same fleet</span>
+    </div>
+<pre class="term"><span class="hi">legbar</span>  5 sessions | 1 cursor | 1 need you (12m) | 1 contested | 2 ci red | 125k held | 18:37:00
+
+<span class="b">NEEDS YOU</span>
+---------
+<span class="b">!! CONTESTED  heron-ops        2 sessions in one working copy: heron-ops-3c, c5468eb1</span>
+<span class="w"> ! WAITING    swamp-ops-ad     needs your reply -- 12m</span>
+   <span class="b">CI RED</span>     roost            ci
+
+SESSIONS                                                    CI / PRS
+--------                                                    --------
+<span class="b">!</span>cc heron-ops-3c FB5  ###-------  32% you 12m  needsinput  fix contested~
+ cc swamp-ops-ad OP5  ###-------  25% you 12m  needsinput  draft discuss~
+ cc heron-ops-16 FB5  #---------  10% cc 3s    working     survey henhou~
+ cc claude-10    OP5  #---------   8% -        idle        -
+<span class="b">!</span>cu c5468eb1     -                  - cu 40s   working     union TUI moc~
+
+<span class="d">q quit  g git  r refresh</span></pre>
+  </div>
+
+  <div id="claude" class="panel" role="tabpanel">
+    <div class="term-chrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span>what Claude already carries — collected vs drawn</span>
+    </div>
+<pre class="term"><span class="d"># one Claude row after henhouse.build() + telemetry join</span>
+
+  source         <span class="hi">claude</span>          drawn as <span class="hi">cc</span>
+  name           heron-ops-3c    <span class="hi">yes</span>
+  model          claude-fable-5  <span class="hi">yes</span> → FB5
+  context_pct    32              <span class="hi">yes</span> → bar + 32%
+  burn_tokens    64000           header total only
+  status         needsinput      <span class="hi">yes</span> + wait cell (you 12m)
+  idle_secs      740             <span class="hi">yes</span> (via wait)
+  active_subagents 3             <span class="w">NO — counted, never drawn</span>
+  git.dirty/staged 2             <span class="w">NO — probed, never drawn</span>
+  git.ahead/behind 1/0           <span class="w">NO — probed, never drawn</span>
+  contested      true            <span class="hi">yes</span> (! + NEEDS YOU)
+  task           ...             <span class="hi">yes</span>
+
+<span class="d"># Cursor row today (transcript mtime only)</span>
+
+  source         cursor          drawn as <span class="hi">cu</span>
+  model          None            <span class="d">-</span>   roost gets this from composerHeaders
+  context_pct    None            <span class="d">-</span>   roost: contextUsagePercent
+  active_subagents 0             always
+  git            None            not probed for Cursor cwd yet
+  pid            None            honest — no process to join</pre>
+  </div>
+
+  <div class="notes">
+    <div class="note">
+      <h2>Claude</h2>
+      <p><span>Render-only gap.</span> Subagent count and git cells are the roost/leghorn fields already sitting in the row dict. No new discovery.</p>
+    </div>
+    <div class="note">
+      <h2>Cursor</h2>
+      <p><span>Discovery gap.</span> Transcript-only cannot fill model/CTX% (roost recon: 71/71 JSONL had zero usage). Headers path is a separate slice.</p>
+    </div>
+    <div class="note">
+      <h2>Layout</h2>
+      <p><span>COMMITS under CI</span> on the right when wide; stacked third when narrow. NEEDS YOU stays full-width above both.</p>
+    </div>
+  </div>
+
+  <div class="pick">
+    <h2>Does this densified Claude row look right?</h2>
+    <div class="choices">
+      <button class="choice" data-pick="ship-claude-first">
+        <span class="mark">A</span>
+        <span class="body">
+          <strong>Ship Claude densify + COMMITS first</strong>
+          <span>Draw sub + git for cc rows, probe git for cu cwd, add commits pane. Leave Cursor model/CTX% for a headers follow-up.</span>
+        </span>
+      </button>
+      <button class="choice" data-pick="widen-headers">
+        <span class="mark">B</span>
+        <span class="body">
+          <strong>Widen this pass — port roost headers too</strong>
+          <span>Same densify, plus composerHeaders so cu rows get name/CTX%/model like roost. Larger, cross-cuts roost’s adapter.</span>
+        </span>
+      </button>
+      <button class="choice" data-pick="tweak-cols">
+        <span class="mark">C</span>
+        <span class="body">
+          <strong>Tweak the columns first</strong>
+          <span>Keep the idea, but change which cells land on the session line (e.g. drop status once wait exists, or put drift in the header only).</span>
+        </span>
+      </button>
+    </div>
+    <div id="picked"></div>
+  </div>
+</div>
+<script>
+  const tabs = document.querySelectorAll('.tab');
+  const panels = document.querySelectorAll('.panel');
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabs.forEach(t => t.setAttribute('aria-selected', t === tab ? 'true' : 'false'));
+      panels.forEach(p => p.classList.toggle('active', p.id === tab.dataset.panel));
+    });
+  });
+  const picked = document.getElementById('picked');
+  document.querySelectorAll('.choice').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.choice').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      picked.textContent = 'selected: ' + btn.dataset.pick;
+    });
+  });
+</script>
+</body>
+</html>

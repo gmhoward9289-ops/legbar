@@ -47,9 +47,11 @@ NAME = "legbar"
 
 # Layout. The session lane is the wider of the two: it carries a task string,
 # which is the only free-text column on the screen. Below MIN_SPLIT the panes
-# stack instead of sitting side by side.
-SESSIONS_MIN = 62
-CI_MIN = 46
+# stack instead of sitting side by side. CI_MIN is the right column's floor
+# (CI + COMMITS share it); SESSIONS_MIN is denser than 0.1.0 because sub+git
+# cells ate ~10 columns of the task.
+SESSIONS_MIN = 72
+CI_MIN = 40
 GAP = 2
 MIN_SPLIT = SESSIONS_MIN + CI_MIN + GAP
 
@@ -110,6 +112,7 @@ def collect(use_git=True, ci=True):
         r["source"] = "claude"
         r["model"] = t.get("model")
         r["burn_tokens"] = t.get("burn_tokens")
+        r["context_tokens"] = t.get("context_tokens")
         r["idle_secs"] = t.get("idle_secs")
 
     for c in henhouse.load_cursor_sessions():
@@ -126,22 +129,46 @@ def collect(use_git=True, ci=True):
             "task": c["task"],
             "status": c["status"],
             "context_pct": None,     # Cursor writes no usage we can trust
+            "context_tokens": None,
             "model": None,
             "burn_tokens": None,
             "subagents": 0,
             "contested": False,
             "git": None,
+            "git_dir": c["cwd"] or "",
             "idle_secs": c["idle_secs"],
         })
+
+    # Claude rows already got git from build(); Cursor was appended after, so
+    # probe those cwds the same way or a contested Cursor checkout would show
+    # no dirt while the Claude peer beside it did.
+    if use_git:
+        cursor_dirs = [r["git_dir"] for r in rows
+                       if r.get("source") == "cursor" and r.get("git_dir")]
+        if cursor_dirs:
+            states = henhouse.gather_git(cursor_dirs)
+            for r in rows:
+                if r.get("source") == "cursor" and r.get("git_dir"):
+                    r["git"] = states.get(r["git_dir"])
 
     mark_contested(rows)
 
     events, gh_warn = ([], "") if not ci else henhouse.github_feed()
+    commits = henhouse.commit_feed(25) if use_git else []
+    claude_sids = [r.get("session_id") for r in rows if r.get("source") == "claude"]
+    subagents = henhouse.list_subagents(claude_sids)
+    # Attach parent display names so the pane can say who farmed the work out.
+    by_sid = {r.get("session_id"): r.get("name") for r in rows}
+    for s in subagents:
+        s["parent"] = by_sid.get(s.get("parent_sid")) or "-"
     return {
         "sessions": sorted(rows, key=session_sort),
         "ci": events,
+        "commits": commits,
+        "subagents": subagents,
         "warn": warn,
         "gh_warn": gh_warn,
+        "use_git": use_git,
     }
 
 
@@ -169,6 +196,39 @@ def wait_cell(r, width=9):
         return "-".ljust(width)
     return ("%s %s" % (who, henhouse.ago(secs) if secs is not None else "?")
             ).ljust(width)[:width]
+
+
+def sub_cell(r, width=2):
+    """Active subagent count, or '-' when none -- fixed width for the column."""
+    n = r.get("subagents") or 0
+    if not n:
+        return "-".ljust(width)[:width]
+    return str(n).ljust(width)[:width]
+
+
+def git_cell(r, width=6):
+    """Compact dirt+drift, matching henhouse's sigils in one short cell.
+
+    '~2^1' is two unstaged and one ahead; 'clean' when the tree is settled;
+    '-' when nothing was probed. Fixed width so the task column stays aligned.
+    """
+    g = r.get("git")
+    if not g:
+        return "-".ljust(width)[:width]
+    parts = [sigil + str(g[key])
+             for sigil, key in (("+", "staged"), ("~", "dirty"), ("?", "untracked"))
+             if g.get(key)]
+    dirt = "".join(parts) or "clean"
+    ahead, behind = g.get("ahead"), g.get("behind")
+    if ahead is None:
+        drift = ""
+    else:
+        drift = (("^%d" % ahead if ahead else "")
+                 + ("v%d" % behind if behind else ""))
+        if not drift:
+            drift = "" if parts else ""
+    text = dirt + drift
+    return text.ljust(width)[:width]
 
 
 def mark_contested(rows):
@@ -265,7 +325,7 @@ def actions(state):
 
     waits = [(r.get("idle_secs") or 0, r) for r in state["sessions"]
              if (r.get("status") or "") in henhouse.ATTENTION]
-    for secs, r in sorted(waits, reverse=True):
+    for secs, r in sorted(waits, key=lambda pair: pair[0], reverse=True):
         out.append({
             "rank": 1, "kind": "WAITING",
             "subject": r.get("name") or "-",
@@ -323,6 +383,11 @@ def header(state, width):
     waits = sorted((r.get("idle_secs") or 0) for r in state["sessions"]
                    if (r.get("status") or "") in henhouse.ATTENTION)
     contested = sum(1 for r in state["sessions"] if r.get("contested"))
+    # Count trees, not sessions -- several sessions in one dirty tree is one
+    # pile of uncommitted work.
+    dirty_trees = {r.get("worktree") or r.get("git_dir") or id(r)
+                   for r in state["sessions"] if henhouse.uncommitted(r)}
+    sub_n = sum(r.get("subagents") or 0 for r in state["sessions"])
 
     bits = ["%s  %d session%s" % (NAME, n, "" if n == 1 else "s")]
     if cursor_n:
@@ -331,6 +396,10 @@ def header(state, width):
         bits.append("%d need you (%s)" % (attention, henhouse.ago(waits[-1])))
     if contested:
         bits.append("%d contested" % contested)
+    if dirty_trees:
+        bits.append("%d uncommitted" % len(dirty_trees))
+    if sub_n:
+        bits.append("%d sub" % sub_n)
     if red:
         bits.append("%d ci red" % red)
     if held:
@@ -355,41 +424,133 @@ def bar(pct, cells=10):
     return "#" * filled + "-" * (cells - filled)
 
 
+# Roost attention groups, plus WAITING for the human-blocked case roost leaves
+# to status text. Ordered by what ignoring them costs.
+NEAR_LIMIT_PCT = 80
+EXPENSIVE_TOKENS = 150_000
+PARKED_IDLE_SECS = 2 * 3600
+WORKING_IDLE_SECS = 60
+
+# (rank, label) -- lower rank draws first
+BUCKET_WAITING = (0, "WAITING ON YOU")
+BUCKET_NEAR = (1, "NEAR LIMIT")
+BUCKET_PARKED = (2, "PARKED + COSTLY")
+BUCKET_WORKING = (3, "WORKING NOW")
+BUCKET_STARTING = (4, "STARTING")
+BUCKET_QUIET = (5, "QUIET")
+
+
+def bucket(r):
+    """Which roost-style group a session belongs in."""
+    status = (r.get("status") or "").lower()
+    if status in henhouse.ATTENTION:
+        return BUCKET_WAITING
+    pct = r.get("context_pct")
+    tok = r.get("context_tokens")
+    idle = r.get("idle_secs")
+    if tok is None and pct is None:
+        # Cursor and brand-new Claude rows: no usage yet.
+        if idle is not None and idle >= WORKING_IDLE_SECS:
+            return BUCKET_QUIET
+        return BUCKET_STARTING
+    if pct is not None and pct >= NEAR_LIMIT_PCT:
+        return BUCKET_NEAR
+    if (tok or 0) > EXPENSIVE_TOKENS and (idle or 0) > PARKED_IDLE_SECS:
+        return BUCKET_PARKED
+    if idle is not None and idle < WORKING_IDLE_SECS:
+        return BUCKET_WORKING
+    return BUCKET_QUIET
+
+
+# Fixed prefix before the free-text task (no status column -- the bucket label
+# and wait cell already say what status said). Keep in sync with _session_row.
+_SESSION_FIXED = 48
+_SESSION_FIXED_GIT = 58
+
+
+def _session_row(r, width, show_git):
+    src = "cu" if r.get("source") == "cursor" else "cc"
+    pct = r.get("context_pct")
+    pct_s = "%3d%%" % round(pct) if pct is not None else "   -"
+    flag = "!" if r.get("contested") else " "
+    fixed = _SESSION_FIXED_GIT if show_git else _SESSION_FIXED
+    task = clip(r.get("task") or r.get("project") or "", max(0, width - fixed))
+    if show_git:
+        line = "%s%-2s %-12s %-4s %s %s %-9s %s %s %s" % (
+            flag, src, clip(r.get("name") or "-", 12),
+            short_model(r.get("model")), bar(pct), pct_s, wait_cell(r),
+            sub_cell(r), git_cell(r), task)
+    else:
+        line = "%s%-2s %-12s %-4s %s %s %-9s %s" % (
+            flag, src, clip(r.get("name") or "-", 12),
+            short_model(r.get("model")), bar(pct), pct_s, wait_cell(r), task)
+    return clip(line, width)
+
+
 def session_lines(state, width):
-    out = ["SESSIONS", "-" * min(width, 8)]
-    if not state["sessions"]:
-        # "collecting" and "nothing running" are different facts, and on the
-        # first frame the difference is the whole question the user has.
+    """Roost-style buckets on the left: attention groups, QUIET collapsed."""
+    out = []
+    rows = state.get("sessions") or []
+    if not rows:
+        out.append(clip("SESSIONS", width))
+        out.append("-" * min(width, 8))
         out.append(clip("collecting..." if state.get("loading")
                         else "no live sessions", width))
         return out
-    for r in state["sessions"]:
-        src = "cu" if r["source"] == "cursor" else "cc"
-        pct = r.get("context_pct")
-        pct_s = "%3d%%" % round(pct) if pct is not None else "   -"
-        # A contested tree is two live sessions editing one working copy, which
-        # is the collision that actually loses work. It outranks anything else
-        # on the row, so it gets the leading glyph rather than a column.
-        flag = "!" if r.get("contested") else " "
-        line = "%s%-2s %-12s %-4s %s %s %-9s %-11s %s" % (
-            flag,
-            src,
-            clip(r.get("name") or "-", 12),
-            short_model(r.get("model")),
-            bar(pct),
-            pct_s,
-            wait_cell(r),
-            clip(r.get("status") or "-", 11),
-            clip(r.get("task") or r.get("project") or "", max(0, width - 63)),
-        )
-        out.append(clip(line, width))
+
+    show_git = bool(state.get("use_git", True))
+    grouped = {}
+    for r in rows:
+        b = bucket(r)
+        grouped.setdefault(b, []).append(r)
+
+    for key in sorted(grouped.keys(), key=lambda b: b[0]):
+        rank, label = key
+        members = grouped[key]
+        if rank == BUCKET_QUIET[0]:
+            # One collapsed line -- roost's QUIET, so idle noise cannot bury
+            # the actionable board above it.
+            names = ", ".join(clip(r.get("name") or "-", 12) for r in members)
+            out.append(clip("QUIET (%d)  %s" % (len(members), names), width))
+            continue
+        out.append(clip(label, width))
+        out.append("-" * min(width, len(label)))
+        for r in members:
+            out.append(_session_row(r, width, show_git))
+        out.append("")
+
     if state.get("warn"):
         out.append(clip("note: %s" % state["warn"], width))
+    # Drop a trailing blank from the last bucket.
+    while out and out[-1] == "":
+        out.pop()
+    return out
+
+
+def subagent_lines(state, width):
+    """Roost's SUBAGENTS panel -- the work a session farmed out."""
+    agents = state.get("subagents") or []
+    out = ["SUBAGENTS", "-" * min(width, 9)]
+    if not agents:
+        if state.get("loading"):
+            out.append(clip("collecting...", width))
+        else:
+            out.append(clip("none running", width))
+        return out
+    for a in agents[:12]:
+        line = "%-7s %-10s %-12s %s" % (
+            a.get("state") or "-",
+            clip(a.get("agent_id") or "-", 10),
+            clip(a.get("parent") or "-", 12),
+            henhouse.ago(a.get("idle_secs")))
+        out.append(clip(line, width))
+    working = sum(1 for a in agents if a.get("state") == "working")
+    out.append(clip("%d subagent(s), %d working" % (len(agents), working), width))
     return out
 
 
 def ci_lines(state, width):
-    out = ["CI / PRS", "-" * min(width, 8)]
+    out = ["GITHUB", "-" * min(width, 6)]
     if state.get("gh_warn"):
         out.append(clip("gh unavailable: %s" % state["gh_warn"], width))
         return out
@@ -412,22 +573,60 @@ def ci_lines(state, width):
     return out
 
 
+COMMIT_LIMIT = 12
+
+
+def commit_lines(state, width):
+    """Leghorn's third pane: what landed, newest first."""
+    out = ["COMMITS", "-" * min(width, 7)]
+    commits = state.get("commits") or []
+    if state.get("loading") and not commits:
+        out.append(clip("collecting...", width))
+        return out
+    if not commits:
+        out.append(clip("no commits", width))
+        return out
+    now = time.time()
+    for c in commits[:COMMIT_LIMIT]:
+        age = henhouse.ago(now - c["ts"]) if c.get("ts") else "-"
+        line = "%-4s %-10s %s" % (
+            age, clip(c.get("repo") or "-", 10),
+            clip(c.get("subject") or "", max(0, width - 16)))
+        out.append(clip(line, width))
+    return out
+
+
+def _stack_right(ci, commits):
+    """GITHUB on top, COMMITS below."""
+    return list(ci) + [""] + list(commits)
+
+
+def _stack_left(sessions, subagents):
+    """Roost buckets, then SUBAGENTS underneath."""
+    return list(sessions) + [""] + list(subagents)
+
+
 def render(state, width):
-    """Two panes side by side, or stacked when the terminal is too narrow."""
-    # The action band spans the full width above both panes, deliberately: it
-    # is the one thing worth reading before anything else, and putting it in a
-    # column would make it compete with the pane beside it.
+    """Union canvas: roost buckets + subagents | leghorn github + commits."""
     band = action_lines(state, width)
+    left = _stack_left(session_lines(state, width), subagent_lines(state, width))
+    right = _stack_right(ci_lines(state, width), commit_lines(state, width))
 
     if width < MIN_SPLIT:
+        # Narrow: NEEDS YOU, roost board, subagents, then leghorn panes.
         lines = [header(state, width), ""] + band
-        lines += session_lines(state, width) + [""] + ci_lines(state, width)
+        lines += (session_lines(state, width) + [""]
+                  + subagent_lines(state, width) + [""]
+                  + ci_lines(state, width) + [""]
+                  + commit_lines(state, width))
         return lines
 
     left_w = max(SESSIONS_MIN, width - CI_MIN - GAP)
     right_w = width - left_w - GAP
-    left = session_lines(state, left_w)
-    right = ci_lines(state, right_w)
+    left = _stack_left(session_lines(state, left_w),
+                       subagent_lines(state, left_w))
+    right = _stack_right(ci_lines(state, right_w),
+                         commit_lines(state, right_w))
 
     lines = [header(state, width), ""] + band
     for i in range(max(len(left), len(right))):
@@ -454,8 +653,8 @@ def run_curses(args):
         # sweep, which takes tens of seconds across many clones -- collecting
         # first leaves the terminal blank that whole time, indistinguishable
         # from a hang. `last = None` means "draw this frame, then collect".
-        state = {"sessions": [], "ci": [], "warn": "", "gh_warn": "",
-                 "loading": True}
+        state = {"sessions": [], "ci": [], "commits": [], "subagents": [],
+                 "warn": "", "gh_warn": "", "loading": True, "use_git": use_git}
         last = None
         while True:
             ch = scr.getch()

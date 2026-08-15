@@ -6,6 +6,7 @@ pane that quietly renders nothing, or a line that runs past the terminal and
 wraps the whole layout into noise.
 """
 
+import time
 import unittest
 
 import henhouse
@@ -164,6 +165,15 @@ class Actions(unittest.TestCase):
         waits = [i["subject"] for i in legbar.actions(st) if i["kind"] == "WAITING"]
         self.assertEqual(waits, ["old", "new"])
 
+    def test_equal_idle_times_do_not_crash_the_sort(self):
+        # Two sessions sat the same number of seconds used to blow up because
+        # sorted() fell through to comparing the row dicts.
+        st = self.state(sessions=[
+            session(name="a", status=henhouse.ATTENTION[0], idle_secs=100),
+            session(name="b", status=henhouse.ATTENTION[0], idle_secs=100)])
+        kinds = [i["kind"] for i in legbar.actions(st)]
+        self.assertEqual(kinds.count("WAITING"), 2)
+
     def test_nothing_to_action_draws_no_band(self):
         # An empty "NEEDS YOU" heading is worse than no heading: it occupies
         # the most valuable space on screen to say nothing.
@@ -202,8 +212,11 @@ class Layout(unittest.TestCase):
         st = self.state(sessions=[session()])
         lines = legbar.render(st, legbar.MIN_SPLIT - 1)
         text = "\n".join(lines)
-        self.assertIn("SESSIONS", text)
-        self.assertIn("CI / PRS", text)
+        # Roost buckets on the left DNA, leghorn panes below when stacked.
+        self.assertTrue("STARTING" in text or "WORKING" in text or "QUIET" in text, text)
+        self.assertIn("GITHUB", text)
+        self.assertIn("COMMITS", text)
+        self.assertIn("SUBAGENTS", text)
 
     def test_both_panes_say_something_when_empty(self):
         # An empty pane and a pane that cannot see are different facts, and a
@@ -273,6 +286,141 @@ class Layout(unittest.TestCase):
                              "number": 7, "title": "t", "ts": 0}])
         for line in legbar.render(st, 200):
             self.assertTrue(line.isascii(), line)
+
+
+class DensifiedSessions(unittest.TestCase):
+    """Git and subagent cells -- data henhouse already has, now on screen."""
+
+    def test_git_cell_combines_dirt_and_drift(self):
+        r = session(git={"staged": 0, "dirty": 2, "untracked": 0,
+                         "ahead": 1, "behind": 0})
+        cell = legbar.git_cell(r)
+        self.assertIn("~2", cell)
+        self.assertIn("^1", cell)
+        self.assertTrue(cell.isascii())
+
+    def test_git_cell_says_clean_when_the_tree_is(self):
+        r = session(git={"staged": 0, "dirty": 0, "untracked": 0,
+                         "ahead": 0, "behind": 0})
+        self.assertTrue(legbar.git_cell(r).startswith("clean"))
+
+    def test_git_cell_is_dash_when_nothing_was_probed(self):
+        self.assertTrue(legbar.git_cell(session(git=None)).startswith("-"))
+
+    def test_sub_cell_shows_a_count_or_a_dash(self):
+        self.assertTrue(legbar.sub_cell(session(subagents=3)).startswith("3"))
+        self.assertTrue(legbar.sub_cell(session(subagents=0)).startswith("-"))
+
+    def test_session_line_draws_sub_and_git(self):
+        st = {"sessions": [session(subagents=3, status="working", idle_secs=3,
+                                   context_pct=40,
+                                   git={"staged": 0, "dirty": 2, "untracked": 0,
+                                        "ahead": 1, "behind": 0},
+                                   task="fix contested")],
+              "ci": [], "commits": [], "subagents": [], "warn": "", "gh_warn": "",
+              "use_git": True}
+        text = "\n".join(legbar.session_lines(st, 120))
+        self.assertIn("WORKING NOW", text)
+        self.assertIn(" 3 ", text)
+        self.assertIn("~2", text)
+        self.assertIn("^1", text)
+
+    def test_quiet_sessions_collapse_to_one_line(self):
+        st = {"sessions": [
+            session(name="a", status="idle", idle_secs=600, context_pct=10),
+            session(name="b", status="idle", idle_secs=900, context_pct=5),
+        ], "ci": [], "commits": [], "subagents": [], "warn": "", "gh_warn": "",
+            "use_git": True}
+        text = "\n".join(legbar.session_lines(st, 120))
+        self.assertIn("QUIET (2)", text)
+        self.assertIn("a", text)
+        self.assertIn("b", text)
+
+    def test_subagents_panel_lists_rows(self):
+        st = {"sessions": [], "ci": [], "commits": [], "warn": "", "gh_warn": "",
+              "use_git": True,
+              "subagents": [{"state": "working", "agent_id": "abc123",
+                             "parent": "heron-ops-3c", "idle_secs": 2}]}
+        text = "\n".join(legbar.subagent_lines(st, 80))
+        self.assertIn("SUBAGENTS", text)
+        self.assertIn("working", text)
+        self.assertIn("heron-ops-3c", text)
+
+    def test_no_git_mode_hides_the_git_column(self):
+        # A wall of dashes claiming every tree is clean is worse than silence.
+        st = {"sessions": [session(task="x")],
+              "ci": [], "commits": [], "warn": "", "gh_warn": "",
+              "use_git": False}
+        text = "\n".join(legbar.session_lines(st, 120))
+        self.assertNotIn("clean", text)
+
+    def test_header_counts_uncommitted_trees_and_subagents(self):
+        st = {"sessions": [
+            session(name="a", subagents=2,
+                    git={"staged": 1, "dirty": 0, "untracked": 0,
+                         "ahead": 0, "behind": 0}, worktree="/w/a"),
+            session(name="b", subagents=1,
+                    git={"staged": 0, "dirty": 1, "untracked": 0,
+                         "ahead": 0, "behind": 0}, worktree="/w/b"),
+            session(name="c", subagents=0, git=None, worktree="/w/c"),
+        ], "ci": [], "commits": [], "warn": "", "gh_warn": "", "use_git": True}
+        head = legbar.header(st, 200)
+        self.assertIn("2 uncommitted", head)
+        self.assertIn("3 sub", head)
+
+
+class CommitsPane(unittest.TestCase):
+    def state(self, **kw):
+        s = {"sessions": [], "ci": [], "commits": [], "warn": "", "gh_warn": "",
+             "use_git": True}
+        s.update(kw)
+        return s
+
+    def test_commits_pane_renders_under_ci_when_split(self):
+        st = self.state(commits=[
+            {"repo": "legbar", "ts": time.time() - 240, "sha": "abc",
+             "author": "g", "refs": "", "subject": "densify session rows"},
+        ])
+        text = "\n".join(legbar.render(st, 160))
+        self.assertIn("COMMITS", text)
+        self.assertIn("legbar", text)
+        self.assertIn("densify", text)
+
+    def test_narrow_terminals_stack_commits_third(self):
+        st = self.state(sessions=[session(status="working", idle_secs=3,
+                                         context_pct=10)], commits=[
+            {"repo": "r", "ts": time.time(), "sha": "a", "author": "g",
+             "refs": "", "subject": "s"},
+        ])
+        text = "\n".join(legbar.render(st, legbar.MIN_SPLIT - 1))
+        pos_w = text.index("WORKING NOW")
+        pos_c = text.index("GITHUB")
+        pos_m = text.index("COMMITS")
+        self.assertLess(pos_w, pos_c)
+        self.assertLess(pos_c, pos_m)
+
+    def test_empty_commits_are_labelled_not_blank(self):
+        text = "\n".join(legbar.render(self.state(), 160))
+        self.assertIn("COMMITS", text)
+        self.assertIn("no commits", text)
+
+    def test_loading_commits_say_collecting(self):
+        text = "\n".join(legbar.render(self.state(loading=True), 160))
+        self.assertIn("collecting", text)
+
+    def test_no_line_exceeds_width_with_commits(self):
+        st = self.state(
+            sessions=[session(task="x" * 80, subagents=2,
+                              git={"staged": 0, "dirty": 1, "untracked": 0,
+                                   "ahead": 2, "behind": 0})],
+            ci=[{"kind": "run", "state": "failed", "repo": "r", "name": "ci",
+                 "ts": 0}],
+            commits=[{"repo": "very-long-repo-name", "ts": time.time(),
+                      "sha": "deadbeef", "author": "a", "refs": "",
+                      "subject": "y" * 80}])
+        for width in (40, 80, 120, 200):
+            for line in legbar.render(st, width):
+                self.assertLessEqual(len(line), width, (width, line))
 
 
 if __name__ == "__main__":

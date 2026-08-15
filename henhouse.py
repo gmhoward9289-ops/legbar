@@ -293,6 +293,56 @@ def count_subagents(sid, now=None):
     return active, recent
 
 
+def list_subagents(session_ids, now=None):
+    """Live-ish subagent rows for the SUBAGENTS pane, keyed by parent sid.
+
+    Same transcript join as count_subagents, but returns one dict per agent so
+    the renderer can show roost's panel rather than a bare count. session_ids
+    is an iterable of parent sids that are still alive -- orphans are excluded
+    by construction.
+    """
+    if not PROJECTS_DIR.is_dir():
+        return []
+    now = time.time() if now is None else now
+    wanted = {s for s in session_ids if s}
+    if not wanted:
+        return []
+    try:
+        projects = list(PROJECTS_DIR.iterdir())
+    except OSError:
+        return []
+    rows = []
+    for proj in projects:
+        for sid in wanted:
+            subs = proj / sid / "subagents"
+            if not subs.is_dir():
+                continue
+            try:
+                entries = list(subs.iterdir())
+            except OSError:
+                continue
+            for f in entries:
+                if not (f.name.startswith("agent-") and f.suffix == ".jsonl"):
+                    continue
+                try:
+                    age = now - f.stat().st_mtime
+                except OSError:
+                    continue
+                if age > AGENT_RECENT_SECS:
+                    continue
+                agent_id = f.stem
+                if agent_id.startswith("agent-"):
+                    agent_id = agent_id[6:]
+                rows.append({
+                    "parent_sid": sid,
+                    "agent_id": agent_id,
+                    "idle_secs": int(age),
+                    "state": "working" if age <= AGENT_ACTIVE_SECS else "idle",
+                })
+    rows.sort(key=lambda r: (0 if r["state"] == "working" else 1, r["idle_secs"]))
+    return rows
+
+
 def summarize(records, mtime, sid=None, now=None):
     """One transcript's records -> the telemetry fields build() consumes.
 
@@ -367,6 +417,7 @@ def summarize(records, mtime, sid=None, now=None):
         # unanswered for an hour looks exactly like one from ten seconds ago.
         "idle_secs": idle,
         "context_pct": pct,
+        "context_tokens": context_tokens,
         "model": model,
         "burn_tokens": burn,
         "files_modified": files,
