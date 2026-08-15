@@ -394,17 +394,12 @@ class CommitsPane(unittest.TestCase):
         self.assertIn("densify", text)
 
     def test_narrow_terminals_stack_commits_third(self):
-        st = self.state(sessions=[session()], commits=[
         st = self.state(sessions=[session(status="working", idle_secs=3,
                                          context_pct=10)], commits=[
             {"repo": "r", "ts": time.time(), "sha": "a", "author": "g",
              "refs": "", "subject": "s"},
         ])
         text = "\n".join(legbar.render(st, legbar.MIN_SPLIT - 1))
-        pos_s = text.index("SESSIONS")
-        pos_c = text.index("CI / PRS")
-        pos_m = text.index("COMMITS")
-        self.assertLess(pos_s, pos_c)
         pos_w = text.index("WORKING NOW")
         pos_c = text.index("GITHUB")
         pos_m = text.index("COMMITS")
