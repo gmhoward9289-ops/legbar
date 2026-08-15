@@ -312,6 +312,13 @@ class DensifiedSessions(unittest.TestCase):
         self.assertTrue(legbar.sub_cell(session(subagents=0)).startswith("-"))
 
     def test_session_line_draws_sub_and_git(self):
+        st = {"sessions": [session(subagents=3,
+                                   git={"staged": 0, "dirty": 2, "untracked": 0,
+                                        "ahead": 1, "behind": 0},
+                                   task="fix contested")],
+              "ci": [], "commits": [], "warn": "", "gh_warn": "",
+              "use_git": True}
+        text = "\n".join(legbar.session_lines(st, 120))
         st = {"sessions": [session(subagents=3, status="working", idle_secs=3,
                                    context_pct=40,
                                    git={"staged": 0, "dirty": 2, "untracked": 0,
@@ -387,12 +394,17 @@ class CommitsPane(unittest.TestCase):
         self.assertIn("densify", text)
 
     def test_narrow_terminals_stack_commits_third(self):
+        st = self.state(sessions=[session()], commits=[
         st = self.state(sessions=[session(status="working", idle_secs=3,
                                          context_pct=10)], commits=[
             {"repo": "r", "ts": time.time(), "sha": "a", "author": "g",
              "refs": "", "subject": "s"},
         ])
         text = "\n".join(legbar.render(st, legbar.MIN_SPLIT - 1))
+        pos_s = text.index("SESSIONS")
+        pos_c = text.index("CI / PRS")
+        pos_m = text.index("COMMITS")
+        self.assertLess(pos_s, pos_c)
         pos_w = text.index("WORKING NOW")
         pos_c = text.index("GITHUB")
         pos_m = text.index("COMMITS")

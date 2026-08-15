@@ -424,6 +424,10 @@ def bar(pct, cells=10):
     return "#" * filled + "-" * (cells - filled)
 
 
+# Fixed prefix before the free-text task: flag+src+name+model+bar+pct+wait+status
+# (+ optional sub+git). Keep in sync with session_lines().
+_SESSION_FIXED = 60
+_SESSION_FIXED_GIT = 70  # + " 3 " + " ~2^1 "
 # Roost attention groups, plus WAITING for the human-blocked case roost leaves
 # to status text. Ordered by what ignoring them costs.
 NEAR_LIMIT_PCT = 80
@@ -497,6 +501,30 @@ def session_lines(state, width):
         out.append(clip("collecting..." if state.get("loading")
                         else "no live sessions", width))
         return out
+    show_git = bool(state.get("use_git", True))
+    fixed = _SESSION_FIXED_GIT if show_git else _SESSION_FIXED
+    for r in state["sessions"]:
+        src = "cu" if r["source"] == "cursor" else "cc"
+        pct = r.get("context_pct")
+        pct_s = "%3d%%" % round(pct) if pct is not None else "   -"
+        # A contested tree is two live sessions editing one working copy, which
+        # is the collision that actually loses work. It outranks anything else
+        # on the row, so it gets the leading glyph rather than a column.
+        flag = "!" if r.get("contested") else " "
+        task = clip(r.get("task") or r.get("project") or "",
+                    max(0, width - fixed))
+        if show_git:
+            line = "%s%-2s %-12s %-4s %s %s %-9s %-11s %s %s %s" % (
+                flag, src, clip(r.get("name") or "-", 12),
+                short_model(r.get("model")), bar(pct), pct_s, wait_cell(r),
+                clip(r.get("status") or "-", 11),
+                sub_cell(r), git_cell(r), task)
+        else:
+            line = "%s%-2s %-12s %-4s %s %s %-9s %-11s %s" % (
+                flag, src, clip(r.get("name") or "-", 12),
+                short_model(r.get("model")), bar(pct), pct_s, wait_cell(r),
+                clip(r.get("status") or "-", 11), task)
+        out.append(clip(line, width))
 
     show_git = bool(state.get("use_git", True))
     grouped = {}
@@ -597,6 +625,17 @@ def commit_lines(state, width):
 
 
 def _stack_right(ci, commits):
+    """CI on top, COMMITS below, blank line between the two pane titles."""
+    return list(ci) + [""] + list(commits)
+
+
+def render(state, width):
+    """Sessions beside CI+COMMITS, or stacked when the terminal is too narrow."""
+    # The action band spans the full width above both panes, deliberately: it
+    # is the one thing worth reading before anything else, and putting it in a
+    # column would make it compete with the pane beside it.
+    band = action_lines(state, width)
+    commits = commit_lines(state, width)
     """GITHUB on top, COMMITS below."""
     return list(ci) + [""] + list(commits)
 
@@ -616,6 +655,7 @@ def render(state, width):
         # Narrow: NEEDS YOU, roost board, subagents, then leghorn panes.
         lines = [header(state, width), ""] + band
         lines += (session_lines(state, width) + [""]
+                  + ci_lines(state, width) + [""] + commits)
                   + subagent_lines(state, width) + [""]
                   + ci_lines(state, width) + [""]
                   + commit_lines(state, width))
@@ -623,6 +663,7 @@ def render(state, width):
 
     left_w = max(SESSIONS_MIN, width - CI_MIN - GAP)
     right_w = width - left_w - GAP
+    left = session_lines(state, left_w)
     left = _stack_left(session_lines(state, left_w),
                        subagent_lines(state, left_w))
     right = _stack_right(ci_lines(state, right_w),
@@ -653,6 +694,8 @@ def run_curses(args):
         # sweep, which takes tens of seconds across many clones -- collecting
         # first leaves the terminal blank that whole time, indistinguishable
         # from a hang. `last = None` means "draw this frame, then collect".
+        state = {"sessions": [], "ci": [], "commits": [], "warn": "",
+                 "gh_warn": "", "loading": True, "use_git": use_git}
         state = {"sessions": [], "ci": [], "commits": [], "subagents": [],
                  "warn": "", "gh_warn": "", "loading": True, "use_git": use_git}
         last = None
