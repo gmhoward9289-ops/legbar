@@ -17,6 +17,21 @@ already says the API may move.
   becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
   the same build. `release.yml` checks the normalisation on every tag.
 
+## v0.1.2 - 2026-08-16
+
+### Fixed
+- **`npm install legbar` no longer refuses Windows.** package.json's `os`
+  field made npm fail the install outright with `EBADPLATFORM` — so the
+  shim's friendly "use pip" message could never print, because the shim was
+  never installed. The field is gone: the install succeeds, `--once` and
+  `--json` work with any Python 3.9+, and asking for the full-screen view
+  without windows-curses now prints the one-line
+  `pip install windows-curses` fix instead of an ImportError traceback.
+  (pip installs were never affected; pyproject.toml pulls windows-curses
+  automatically on Windows.)
+- The shim also probes `py -3` on Windows, after `python3` and `python` —
+  the launcher is what a python.org install reliably puts on PATH.
+
 ## v0.1.0 - 2026-08-09
 
 First cut. Both lanes render against real data on COOPER.
