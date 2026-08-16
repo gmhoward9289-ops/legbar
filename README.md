@@ -55,6 +55,30 @@ pipx install legbar
 
 Python 3.9+, standard library only. Works on macOS, Linux and Windows.
 
+legbar also publishes to a few other channels, picked automatically off the
+same release:
+
+```
+pip install legbar                          # if you'd rather skip pipx
+npm install -g legbar                        # Node's on the box already anyway
+brew install gmhoward9289-ops/tap/legbar     # macOS / Linux
+winget install gmhoward9289-ops.legbar       # Windows
+```
+
+Debian and Ubuntu can add the signed apt repo instead of a one-shot `.deb`:
+
+```
+curl -fsSL https://gmhoward9289-ops.github.io/legbar/legbar-archive-keyring.asc \
+  | sudo gpg --dearmor -o /usr/share/keyrings/legbar-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/legbar-archive-keyring.gpg] \
+  https://gmhoward9289-ops.github.io/legbar stable main" \
+  | sudo tee /etc/apt/sources.list.d/legbar.list
+sudo apt update && sudo apt install legbar
+```
+
+Windows without a package manager: grab the frozen `.exe` zip from the
+[latest release](https://github.com/gmhoward9289-ops/legbar/releases/latest).
+
 ## Usage
 
 ```
