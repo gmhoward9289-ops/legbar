@@ -629,13 +629,7 @@ def _stack_right(ci, commits):
     return list(ci) + [""] + list(commits)
 
 
-def render(state, width):
-    """Sessions beside CI+COMMITS, or stacked when the terminal is too narrow."""
-    # The action band spans the full width above both panes, deliberately: it
-    # is the one thing worth reading before anything else, and putting it in a
-    # column would make it compete with the pane beside it.
-    band = action_lines(state, width)
-    commits = commit_lines(state, width)
+def _stack_right(ci, commits):
     """GITHUB on top, COMMITS below."""
     return list(ci) + [""] + list(commits)
 
@@ -655,7 +649,6 @@ def render(state, width):
         # Narrow: NEEDS YOU, roost board, subagents, then leghorn panes.
         lines = [header(state, width), ""] + band
         lines += (session_lines(state, width) + [""]
-                  + ci_lines(state, width) + [""] + commits)
                   + subagent_lines(state, width) + [""]
                   + ci_lines(state, width) + [""]
                   + commit_lines(state, width))
@@ -663,7 +656,6 @@ def render(state, width):
 
     left_w = max(SESSIONS_MIN, width - CI_MIN - GAP)
     right_w = width - left_w - GAP
-    left = session_lines(state, left_w)
     left = _stack_left(session_lines(state, left_w),
                        subagent_lines(state, left_w))
     right = _stack_right(ci_lines(state, right_w),
