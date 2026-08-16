@@ -41,6 +41,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -113,6 +114,23 @@ CURSOR_PROJECTS_DIR = CURSOR_HOME / "projects"
 # ever ran shows up forever. A day is long enough to cover an overnight run.
 CURSOR_MAX_IDLE_SECS = _env_int(
     "LEGBAR_CURSOR_MAX_IDLE_SECS", 86400, "ROOST_CURSOR_MAX_IDLE_SECS")
+
+# Cursor's global SQLite index. composerHeaders is the only place Cursor
+# records its own context meter (contextUsagePercent) and composer names --
+# roost's recon measured 71/71 live transcripts carrying neither, so a
+# transcript-only lane cannot fill the model or CTX cells (see roost's
+# docs/cursor-on-disk.md).
+def _cursor_state_db_default():
+    if sys.platform == "win32":
+        return HOME / "AppData" / "Roaming" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+    if sys.platform == "darwin":
+        return (HOME / "Library" / "Application Support" / "Cursor" / "User"
+                / "globalStorage" / "state.vscdb")
+    return HOME / ".config" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+
+
+CURSOR_STATE_DB = _env_path(
+    "LEGBAR_CURSOR_STATE_DB", _cursor_state_db_default(), "ROOST_CURSOR_STATE_DB")
 
 # Which discovery lanes run at all. Set to "claude" alone on a machine with no
 # Cursor install to skip the directory walk entirely.
@@ -1320,8 +1338,71 @@ def cursor_slug_to_cwd(slug):
     return base + sep.join(resolved)
 
 
-def _cursor_task_from_transcript(path):
-    """Newest user_query in a Cursor transcript, or ''. Tail-read like Claude's."""
+def _cursor_ms_to_epoch(ms):
+    """composerHeaders timestamps are ms since epoch; tolerate seconds too."""
+    if not isinstance(ms, (int, float)) or ms <= 0:
+        return None
+    return ms / 1000.0 if ms > 1e12 else float(ms)
+
+
+def read_cursor_composer_headers(db_path=None):
+    """Non-archived parent composers from Cursor's state.vscdb, keyed by
+    composer id: name, subtitle, ctx_pct (Cursor's own meter), last_write.
+
+    Empty on any error -- a missing DB is normal on a machine that has never
+    run Cursor, and the view must not care. Opened read-only via URI: Cursor
+    keeps this file open while it runs, and a write-mode open can fail or
+    corrupt.
+    """
+    path = Path(db_path) if db_path else CURSOR_STATE_DB
+    if path is None or not path.is_file():
+        return {}
+    headers = {}
+    try:
+        uri = "file:%s?mode=ro" % path.resolve().as_posix()
+        con = sqlite3.connect(uri, uri=True, timeout=0.5)
+        try:
+            cur = con.execute(
+                "SELECT composerId, lastUpdatedAt, createdAt, value "
+                "FROM composerHeaders "
+                "WHERE COALESCE(isSubagent, 0) = 0 "
+                "AND COALESCE(isArchived, 0) = 0")
+            for cid, lu, created, val in cur:
+                try:
+                    h = json.loads(val) if val else {}
+                except ValueError:
+                    h = {}
+                if not isinstance(h, dict):
+                    h = {}
+                # Draft empty-state and ephemeral chat composers are noise.
+                if h.get("isDraft") or cid == "empty-state-draft":
+                    continue
+                if h.get("unifiedMode") == "chat" and h.get("isEphemeral"):
+                    continue
+                pct = h.get("contextUsagePercent")
+                headers[cid] = {
+                    "name": (h.get("name") or "").strip() or None,
+                    "subtitle": (h.get("subtitle") or "").strip() or None,
+                    "ctx_pct": float(pct) if isinstance(pct, (int, float)) else None,
+                    "last_write": _cursor_ms_to_epoch(
+                        h.get("lastUpdatedAt") or lu
+                        or h.get("createdAt") or created),
+                }
+        finally:
+            con.close()
+    except (sqlite3.Error, OSError, ValueError):
+        return {}
+    return headers
+
+
+def _cursor_scan_transcript(path):
+    """Newest user_query and best-effort model from a Cursor transcript.
+
+    Tail-read like Claude's. The model is rare on purpose: parent records
+    almost never carry message.model, so the usual source is a spawned Task
+    tool_use whose input names the model -- the only place roost's recon
+    found one across 71 live files.
+    """
     try:
         size = path.stat().st_size
         with path.open("rb") as fh:
@@ -1330,8 +1411,8 @@ def _cursor_task_from_transcript(path):
                 fh.readline()          # drop the partial line the seek landed in
             blob = fh.read().decode("utf-8", "replace")
     except OSError:
-        return ""
-    task = ""
+        return "", None
+    task, model = "", None
     for line in blob.splitlines():
         if '"' not in line:
             continue
@@ -1339,13 +1420,28 @@ def _cursor_task_from_transcript(path):
             rec = json.loads(line)
         except ValueError:
             continue                   # a torn last line is normal, not an error
-        text = rec.get("text") or rec.get("content")
-        if not isinstance(text, str):
+        if not isinstance(rec, dict):
             continue
-        m = re.search(r"<user_query>\s*(.*?)\s*</user_query>", text, re.DOTALL)
-        if m:
-            task = " ".join(m.group(1).split())
-    return task
+        text = rec.get("text") or rec.get("content")
+        if isinstance(text, str):
+            m = re.search(r"<user_query>\s*(.*?)\s*</user_query>", text, re.DOTALL)
+            if m:
+                task = " ".join(m.group(1).split())
+        msg = rec.get("message") if isinstance(rec.get("message"), dict) else {}
+        found = msg.get("model") or rec.get("model")
+        if not found:
+            content = msg.get("content") or rec.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if (isinstance(part, dict)
+                            and part.get("type") == "tool_use"
+                            and part.get("name") == "Task"
+                            and isinstance(part.get("input"), dict)
+                            and part["input"].get("model")):
+                        found = part["input"]["model"]
+        if found:
+            model = str(found)         # forward scan: the newest mention wins
+    return task, model
 
 
 def load_cursor_sessions(now=None):
@@ -1355,6 +1451,12 @@ def load_cursor_sessions(now=None):
     ``source="cursor"``. ``pid`` is None on purpose: there is no process to
     join against, and a fake one would make a weaker signal look like the
     stronger one.
+
+    Rows are enriched from composerHeaders when state.vscdb is readable:
+    ``ctx_pct`` is Cursor's own meter, the composer name backs up a transcript
+    with no user_query, and lastUpdatedAt can refresh liveness when the header
+    is newer than the transcript. Without the DB the lane degrades to exactly
+    what it was -- mtime and task text -- rather than failing.
     """
     if "cursor" not in backends():
         return []
@@ -1362,6 +1464,7 @@ def load_cursor_sessions(now=None):
     if not root.is_dir():
         return []
     now = time.time() if now is None else now
+    headers = read_cursor_composer_headers()
     rows = []
     try:
         projects = list(root.iterdir())
@@ -1384,8 +1487,14 @@ def load_cursor_sessions(now=None):
                 continue
             newest = max(files, key=lambda f: f.stat().st_mtime)
             idle = now - newest.stat().st_mtime
+            h = headers.get(agent.name) or {}
+            # The header's lastUpdatedAt can move without the transcript (a
+            # turn that wrote no JSONL); take whichever says fresher.
+            if h.get("last_write"):
+                idle = min(idle, now - h["last_write"])
             if idle > CURSOR_MAX_IDLE_SECS:
                 continue
+            task, model = _cursor_scan_transcript(newest)
             rows.append({
                 "source": "cursor",
                 "pid": None,
@@ -1394,7 +1503,11 @@ def load_cursor_sessions(now=None):
                 "cwd": cwd,
                 "idle_secs": int(idle),
                 "status": "working" if idle < WORKING_SECS else "idle",
-                "task": _cursor_task_from_transcript(newest),
+                "task": task or h.get("name") or h.get("subtitle") or "",
+                # Cursor's own meter, not a transcript inference -- measured,
+                # the transcripts carry no usage at all.
+                "ctx_pct": h.get("ctx_pct"),
+                "model": model,
             })
     rows.sort(key=lambda r: r["idle_secs"])
     return rows

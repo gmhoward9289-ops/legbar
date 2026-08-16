@@ -64,6 +64,8 @@ MODEL_SHORT = (
     ("claude-fable-5", "FB5"),
     ("claude-opus-4", "OP4"),
     ("claude-sonnet-4", "SN4"),
+    # Cursor's own family, seen in Task tool_use input.model.
+    ("composer-", "CMP"),
 )
 
 
@@ -128,9 +130,13 @@ def collect(use_git=True, ci=True):
             "branch": "",
             "task": c["task"],
             "status": c["status"],
-            "context_pct": None,     # Cursor writes no usage we can trust
+            # Cursor's own meter from composerHeaders; None when state.vscdb
+            # is unreadable. Tokens stay None -- the DB gives a %, not a count,
+            # and a reversed estimate would dress the weaker signal as the
+            # stronger one.
+            "context_pct": c.get("ctx_pct"),
             "context_tokens": None,
-            "model": None,
+            "model": c.get("model"),
             "burn_tokens": None,
             "subagents": 0,
             "contested": False,
