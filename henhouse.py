@@ -311,6 +311,154 @@ def count_subagents(sid, now=None):
     return active, recent
 
 
+# agentId -> the short `description` an Agent tool call was launched with.
+# Module-level and never pruned: a finished agent's description is still
+# worth showing while its row lingers in AGENT_RECENT_SECS, and re-fetching
+# it from a parent transcript that may have scrolled the record out of any
+# tail window is not something a fresh call can redo.
+_AGENT_DESCRIPTIONS = {}
+# Parent transcript path (str) -> bytes already scanned for descriptions.
+_HARVEST_POS = {}
+
+
+def harvest_agent_descriptions(parent_path):
+    """Pull each subagent's short description out of the parent's own
+    transcript, the way roost does.
+
+    A subagent's own transcript never states what it was asked to do in
+    short form -- only the parent's `toolUseResult` carries the `description`
+    the Agent tool call was given, keyed by agentId. Incremental: only bytes
+    appended since the last scan of this parent are read, so a curses view
+    polling every few seconds doesn't re-read a growing transcript from byte
+    0 on every tick.
+    """
+    key = str(parent_path)
+    pos = _HARVEST_POS.get(key, 0)
+    try:
+        size = parent_path.stat().st_size
+        if size < pos:
+            pos = 0  # truncated or replaced -- start over
+        if size == pos:
+            return
+        with parent_path.open("rb") as fh:
+            fh.seek(pos)
+            data = fh.read()
+    except OSError:
+        return
+    # Consume whole lines only; a half-written trailing line waits for the
+    # next pass instead of being parsed as garbage and skipped forever.
+    cut = data.rfind(b"\n") + 1
+    _HARVEST_POS[key] = pos + cut
+    for line in data[:cut].decode("utf-8", "replace").splitlines():
+        if '"agentId"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        result = rec.get("toolUseResult")
+        if not isinstance(result, dict):
+            continue
+        agent_id = result.get("agentId")
+        description = result.get("description")
+        if agent_id and description:
+            _AGENT_DESCRIPTIONS[agent_id] = description
+
+
+def subagent_task(path):
+    """Fallback label: the opening line of the task prompt, from the
+    subagent's own transcript.
+
+    Used when harvest_agent_descriptions() has no `description` for this
+    agent yet -- the parent's toolUseResult record is written when the Agent
+    call is made, but a caller can race it, and a sibling-fanned-out prompt
+    ("Finish a stranded work stream...") is often identical across several
+    agents, so this is a weaker label than the harvested one, not a
+    replacement for it. The task prompt an Agent tool call hands a subagent
+    is always its first user turn -- everything after is the subagent's own
+    work, not the brief it was given -- so a single readline() gets the
+    whole answer without parsing the rest of a transcript that can run to
+    megabytes.
+    """
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            first = fh.readline()
+    except OSError:
+        return ""
+    if not first.strip():
+        return ""
+    try:
+        rec = json.loads(first)
+    except ValueError:
+        return ""
+    content = (rec.get("message") or {}).get("content")
+    if isinstance(content, list):
+        content = " ".join(
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text")
+    if not isinstance(content, str) or not content.strip():
+        return ""
+    return content.strip().splitlines()[0].strip()
+
+
+SESSION_TOPIC_SCAN_LINES = 50
+
+
+def session_topic(path):
+    """First real thing the human said in a top-level session, one line.
+
+    henhouse's "task" field comes from the claims registry, which is nearly
+    always empty in practice -- most sessions never write a claim, so
+    everywhere that field is shown ends up saying nothing more specific than
+    a repo name. Claude Code and Cursor both title a session (or its own
+    task-list row) from what the human actually asked for, so this is the
+    fallback that lets a fleet view say the same thing -- "which one is
+    this" answered the way the tool the human already has open answers it.
+
+    Unlike a subagent transcript, whose first record is always its task
+    prompt, a top-level transcript leads with a handful of queue-operation
+    and attachment records before the human's own first message -- so this
+    scans forward instead of trusting line 1, but only up to
+    SESSION_TOPIC_SCAN_LINES: that preamble is short and bounded, and a
+    transcript that still hasn't shown a real user turn by then isn't going
+    to on this pass. isMeta records are hook- or system-injected text (e.g.
+    a <system-reminder>), not something the human said, and are skipped for
+    the same reason a stray <system-reminder> without isMeta is skipped too.
+    """
+    try:
+        fh = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    try:
+        with fh:
+            for i, line in enumerate(fh):
+                if i >= SESSION_TOPIC_SCAN_LINES:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if rec.get("type") != "user" or rec.get("isMeta"):
+                    continue
+                content = (rec.get("message") or {}).get("content")
+                if isinstance(content, list):
+                    content = " ".join(
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text")
+                if not isinstance(content, str):
+                    continue
+                content = content.strip()
+                if not content or content.startswith("<system-reminder"):
+                    continue
+                return content.splitlines()[0].strip()
+    except OSError:
+        return ""
+    return ""
+
+
 def list_subagents(session_ids, now=None):
     """Live-ish subagent rows for the SUBAGENTS pane, keyed by parent sid.
 
@@ -339,6 +487,10 @@ def list_subagents(session_ids, now=None):
                 entries = list(subs.iterdir())
             except OSError:
                 continue
+            # The parent transcript sits beside the subagents/ dir it owns --
+            # harvest before reading agent files so a freshly-completed
+            # agent's description is already in _AGENT_DESCRIPTIONS below.
+            harvest_agent_descriptions(proj / ("%s.jsonl" % sid))
             for f in entries:
                 if not (f.name.startswith("agent-") and f.suffix == ".jsonl"):
                     continue
@@ -354,6 +506,7 @@ def list_subagents(session_ids, now=None):
                 rows.append({
                     "parent_sid": sid,
                     "agent_id": agent_id,
+                    "task": _AGENT_DESCRIPTIONS.get(agent_id) or subagent_task(f),
                     "idle_secs": int(age),
                     "state": "working" if age <= AGENT_ACTIVE_SECS else "idle",
                 })
