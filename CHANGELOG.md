@@ -17,7 +17,10 @@ already says the API may move.
   becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
   the same build. `release.yml` checks the normalisation on every tag.
 
-## Unreleased
+## v0.3.0 - 2026-08-16
+
+Minor, not patch: `--waiting-alert` is a new flag, and NEEDS YOU changed what
+it flags by default.
 
 ### Changed
 - **Session rows give five more characters to the task column.** The standalone
