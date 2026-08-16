@@ -89,10 +89,12 @@ class WaitState(unittest.TestCase):
         self.assertEqual(secs, 125)
 
     def test_working_is_waiting_on_the_model(self):
+        # Deliberately not "cc"/"cu": the row's name prefix already says which
+        # tool it is, so this cell only names the side that is pending.
         self.assertEqual(legbar.waiting_on(
-            session(status="working", idle_secs=3))[0], "cc")
+            session(status="working", idle_secs=3))[0], "ai")
         self.assertEqual(legbar.waiting_on(
-            session(status="working", source="cursor", idle_secs=3))[0], "cu")
+            session(status="working", source="cursor", idle_secs=3))[0], "ai")
 
     def test_idle_is_waiting_on_nobody(self):
         self.assertEqual(legbar.waiting_on(session(status="idle")), ("", None))
@@ -248,7 +250,18 @@ class Layout(unittest.TestCase):
     def test_cursor_rows_are_marked_distinctly(self):
         st = self.state(sessions=[session(source="cursor", name="ab12cd34")])
         text = "\n".join(legbar.render(st, 200))
-        self.assertIn("cu ", text)
+        self.assertIn("cu-ab12cd34", text)
+
+    def test_claude_rows_carry_the_prefix_too(self):
+        st = self.state(sessions=[session(name="wagyu")])
+        self.assertIn("cc-wagyu", "\n".join(legbar.render(st, 200)))
+
+    def test_a_long_name_keeps_the_prefix_and_marks_the_cut(self):
+        # The prefix is what the eye scans for, so it survives truncation.
+        label = legbar.src_label(session(name="artifacts-example-long"))
+        self.assertEqual(len(label), 12)
+        self.assertTrue(label.startswith("cc-"))
+        self.assertTrue(label.endswith("~"))
 
     def test_the_header_counts_what_matters(self):
         st = self.state(
@@ -476,6 +489,109 @@ class VersionStamp(unittest.TestCase):
         self.assertEqual(out["version"], legbar.__version__)
         # version leads the object, so a human tailing the stream sees it.
         self.assertEqual(next(iter(out)), "version")
+
+
+class WaitingIsQuietUntilItIsOld(unittest.TestCase):
+    """A young wait is listed but unflagged; an old one shouts.
+
+    The marker is the whole mechanism -- colorize_band() colours by sigil, so
+    pinning the sigil pins the colour too, in a plain-text test.
+    """
+
+    def state(self, secs, loud_after=None):
+        st = {"sessions": [session(status=henhouse.ATTENTION[0],
+                                   idle_secs=secs)],
+              "ci": [], "warn": "", "gh_warn": ""}
+        if loud_after is not None:
+            st["waiting_loud_secs"] = loud_after
+        return st
+
+    def marker(self, secs, loud_after=None):
+        lines = legbar.action_lines(self.state(secs, loud_after), 200)
+        return next(l for l in lines if "WAITING" in l)[:2]
+
+    def test_a_young_wait_is_listed_without_a_marker(self):
+        self.assertEqual(self.marker(120), "  ")
+
+    def test_an_old_wait_is_flagged(self):
+        self.assertEqual(self.marker(legbar.WAITING_LOUD_SECS + 1), " !")
+
+    def test_the_boundary_is_inclusive(self):
+        self.assertEqual(self.marker(legbar.WAITING_LOUD_SECS), " !")
+
+    def test_the_threshold_is_configurable(self):
+        self.assertEqual(self.marker(600, loud_after=300), " !")
+        self.assertEqual(self.marker(600, loud_after=1800), "  ")
+
+    def test_zero_flags_every_wait(self):
+        self.assertEqual(self.marker(0, loud_after=0), " !")
+
+    def test_a_quiet_wait_still_ranks_as_one(self):
+        # Quieter, not demoted: it sorts and counts exactly as before.
+        items = legbar.actions(self.state(1))
+        self.assertEqual([i["rank"] for i in items], [1])
+
+    def test_contested_is_loud_from_the_first_frame(self):
+        st = {"sessions": [session(contested=True, idle_secs=1)],
+              "ci": [], "warn": "", "gh_warn": ""}
+        line = next(l for l in legbar.action_lines(st, 200)
+                    if "CONTESTED" in l and "-" * 5 not in l)
+        self.assertEqual(line[:2], "!!")
+
+    def test_the_cli_sets_the_threshold(self):
+        before = legbar.WAITING_LOUD_SECS
+        try:
+            legbar.main(["--json", "--no-git", "--no-ci", "--waiting-alert",
+                         "7"])
+            self.assertEqual(legbar.WAITING_LOUD_SECS, 7 * 60)
+        finally:
+            legbar.WAITING_LOUD_SECS = before
+
+
+class SessionRowColour(unittest.TestCase):
+    """The span layer must keep landing on the columns render() draws.
+
+    Nothing else covers it, and every span here is a hardcoded offset into a
+    format string -- so a width change that nobody mirrors here paints the
+    wrong bytes rather than failing loudly.
+    """
+
+    def row(self, show_git=False, **kw):
+        line = legbar._session_row(session(**kw), 200, show_git)
+        return line, legbar._session_row_spans(line, show_git)
+
+    def span_at(self, spans, start):
+        return next(s for s in spans if s[0] == start)
+
+    def test_the_prefix_is_colour_coded_by_tool(self):
+        _, claude = self.row()
+        _, cursor = self.row(source="cursor")
+        self.assertEqual(self.span_at(claude, 1)[2], legbar.C_BLUE)
+        self.assertEqual(self.span_at(cursor, 1)[2], legbar.C_MAGENTA)
+        # Bold picks the bright variant of each pair -- legible on dark.
+        self.assertTrue(self.span_at(claude, 1)[3])
+        self.assertTrue(self.span_at(cursor, 1)[3])
+
+    def test_spans_land_on_the_columns_they_name(self):
+        for show_git in (False, True):
+            line, spans = self.row(show_git=show_git, name="wagyu",
+                                   model="claude-opus-5", context_pct=32,
+                                   status="working", idle_secs=5)
+            self.assertEqual(line[1:4], "cc-")
+            self.assertEqual(self.span_at(spans, 4)[1], 9)          # name
+            self.assertEqual(line[14:18].strip(), "OP5")            # model
+            self.assertEqual(line[30:34].strip(), "32%")            # pct
+            self.assertEqual(line[35:42].strip(), "ai 5s")          # wait
+            task_start = 53 if show_git else 43
+            self.assertEqual(self.span_at(spans, task_start)[0], task_start)
+
+    def test_the_task_column_starts_where_the_clip_budget_says(self):
+        # _session_row clips the task against these constants; if they drift
+        # from the format string the text is cut at the wrong place.
+        for show_git, fixed in ((False, legbar._SESSION_FIXED),
+                                (True, legbar._SESSION_FIXED_GIT)):
+            line, _ = self.row(show_git=show_git, task="X" * 40)
+            self.assertEqual(line.index("X"), fixed, (show_git, line))
 
 
 if __name__ == "__main__":
