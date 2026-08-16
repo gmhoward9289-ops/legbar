@@ -710,6 +710,25 @@ def pane_split(width):
     return left_w, width - left_w - GAP
 
 
+def stamp_version(lines, width):
+    """v<version>, bottom-right of the last line -- the home roost gives it.
+
+    Appended to whatever the last line turns out to be, so the stamp can
+    never itself be the row that gets clipped off, and dropped rather than
+    wrapped when the line leaves fewer than two spare columns -- a wrapped
+    line scrolls the display. render()'s output is plain text (colour is a
+    curses-side span pass), so unlike roost there are no escape bytes to
+    discount: len() is the column count.
+    """
+    if not lines:
+        return lines
+    stamp = "v" + __version__
+    room = width - len(lines[-1]) - len(stamp)
+    if room >= 2:
+        lines[-1] += " " * room + stamp
+    return lines
+
+
 def render(state, width):
     """Union canvas: roost buckets + subagents | leghorn github + commits."""
     band = action_lines(state, width)
@@ -722,7 +741,7 @@ def render(state, width):
                   + subagent_lines(state, width) + [""]
                   + ci_lines(state, width) + [""]
                   + commit_lines(state, width))
-        return lines
+        return stamp_version(lines, width)
 
     left_w, right_w = split
     left = _stack_left(session_lines(state, left_w),
@@ -735,7 +754,7 @@ def render(state, width):
         l = left[i] if i < len(left) else ""
         r = right[i] if i < len(right) else ""
         lines.append((l.ljust(left_w) + " " * GAP + r).rstrip())
-    return lines
+    return stamp_version(lines, width)
 
 
 # ---------------------------------------------------------------------------
@@ -1197,8 +1216,17 @@ def run_curses(args):
             scr.erase()
             paint(scr, curses, state, w - 1, h - 1, colors=colors)
             footer_attr = (curses.color_pair(C_DIM) | curses.A_DIM) if colors else 0
+            footer = "q quit  g git  r refresh"
+            stamp = "v" + __version__
             try:
-                scr.addstr(h - 1, 0, "q quit  g git  r refresh"[:w - 1], footer_attr)
+                scr.addstr(h - 1, 0, footer[:w - 1], footer_attr)
+                # Version, bottom-right of the footer row, dim -- roost's
+                # stamp, on legbar's one row that exists in every frame.
+                # Dropped rather than clipped when the footer leaves fewer
+                # than two spare columns; ends at w-2 because addstr into
+                # the terminal's last cell raises on some curses builds.
+                if (w - 1) - len(footer) - len(stamp) >= 2:
+                    scr.addstr(h - 1, w - 1 - len(stamp), stamp, footer_attr)
             except curses.error:
                 pass
             scr.refresh()
@@ -1233,8 +1261,11 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     if args.json:
-        print(json.dumps(collect(use_git=not args.no_git, ci=not args.no_ci),
-                         indent=2, default=str))
+        # version first: anything programmatic reading this stream should
+        # not have to shell out to --version to learn which schema it got.
+        out = {"version": __version__}
+        out.update(collect(use_git=not args.no_git, ci=not args.no_ci))
+        print(json.dumps(out, indent=2, default=str))
         return 0
     if args.once or not sys.stdout.isatty():
         width = shutil.get_terminal_size((160, 24)).columns

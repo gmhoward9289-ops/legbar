@@ -430,5 +430,53 @@ class CommitsPane(unittest.TestCase):
                 self.assertLessEqual(len(line), width, (width, line))
 
 
+class VersionStamp(unittest.TestCase):
+    """roost's stamp semantics, ported: bottom-right, never the clipped row,
+    dropped rather than wrapped."""
+
+    def state(self, **kw):
+        s = {"sessions": [], "ci": [], "warn": "", "gh_warn": ""}
+        s.update(kw)
+        return s
+
+    def test_version_is_stamped_bottom_right(self):
+        out = legbar.render(self.state(), 200)
+        self.assertTrue(out[-1].endswith("v" + legbar.__version__), out[-1])
+
+    def test_version_is_stamped_when_stacked(self):
+        out = legbar.render(self.state(), legbar.MIN_SPLIT - 1)
+        self.assertTrue(out[-1].endswith("v" + legbar.__version__), out[-1])
+
+    def test_stamped_line_never_exceeds_the_width(self):
+        st = self.state(sessions=[session(task="x" * 200)])
+        for width in (40, 80, 120, 200):
+            for line in legbar.render(st, width):
+                self.assertLessEqual(len(line), width, (width, line))
+
+    def test_version_is_dropped_rather_than_wrapped(self):
+        # 30 columns of text in a 32-column line leaves no room for the
+        # stamp plus its two-space gutter; wrapping would scroll the display.
+        lines = legbar.stamp_version(["x" * 30], 32)
+        self.assertEqual(lines, ["x" * 30])
+
+    def test_stamping_an_empty_frame_is_a_no_op(self):
+        self.assertEqual(legbar.stamp_version([], 80), [])
+
+    def test_json_carries_the_version(self):
+        import io
+        import json as _json
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        buf = io.StringIO()
+        with mock.patch.object(legbar, "collect", return_value={"sessions": []}):
+            with redirect_stdout(buf):
+                legbar.main(["--json"])
+        out = _json.loads(buf.getvalue())
+        self.assertEqual(out["version"], legbar.__version__)
+        # version leads the object, so a human tailing the stream sees it.
+        self.assertEqual(next(iter(out)), "version")
+
+
 if __name__ == "__main__":
     unittest.main()

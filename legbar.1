@@ -45,7 +45,11 @@ plain ASCII.
 Render one frame to stdout and exit. For pipes, CI logs and screenshots.
 .TP
 .B \-\-json
-Emit the joined state as JSON and exit, for piping somewhere else.
+Emit the joined state as JSON and exit, for piping somewhere else. The
+object's first key is
+.BR version ,
+so a consumer can tell which schema it is reading without shelling out to
+\fB\-\-version\fR.
 .TP
 .B \-\-no\-git
 Skip the per-tree git probes. Toggle at runtime with \fBg\fR.
