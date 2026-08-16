@@ -41,7 +41,7 @@ from pathlib import Path
 
 import henhouse
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 NAME = "legbar"
 
@@ -675,7 +675,25 @@ def render(state, width):
 
 
 def run_curses(args):
-    import curses
+    # Deferred import, and deliberately so: --once and --json never need
+    # curses, so a Windows Python without windows-curses still serves both.
+    # Only the full-screen view pays, and it fails with the fix, not a
+    # traceback. pip installs pull windows-curses automatically (see
+    # pyproject.toml); the npm shim cannot deliver a pip package, so this
+    # message is the npm-on-Windows path's one extra step.
+    try:
+        import curses
+    except ImportError:
+        if sys.platform == "win32":
+            sys.stderr.write(
+                "legbar's full-screen view needs the windows-curses package:\n"
+                "  \"%s\" -m pip install windows-curses\n"
+                "(--once and --json work without it)\n" % sys.executable)
+        else:
+            sys.stderr.write(
+                "legbar: this Python has no curses module; "
+                "--once and --json still work\n")
+        sys.exit(1)
 
     def loop(scr):
         curses.curs_set(0)
