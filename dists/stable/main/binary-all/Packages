@@ -1,0 +1,26 @@
+Package: legbar
+Architecture: all
+Version: 0.1.1
+Priority: optional
+Section: utils
+Maintainer: George M. Howard <dev@swamplink.com>
+Depends: python3 (>= 3.9)
+Recommends: gh, git
+Filename: pool/main/l/legbar/legbar_0.1.1_all.deb
+Size: 28894
+MD5sum: 8d70cf44180b25ac6e19793103213724
+SHA1: 7e6df3924f7da8a1d62f16ef0a88a33a4e4e78c2
+SHA256: d81b021d6afee6d5198f67b267a6d2f34b851f6b44cb3fae3d92fe14d7f4fd46
+SHA512: b55c90ec383fb743edea73880296bd9f70a063b7bd6511342d2eb8db15b8e0f36bbbfa220c01690c575a0f2e02bb0c047ee3c894ae37c66bef6e5a0e387893b3
+Homepage: https://github.com/gmhoward9289-ops/legbar
+Description: one screen for the whole fleet: live agent sessions beside GitHub CI
+ A full-screen curses view with both fleet lanes on one canvas: every live
+ agent session on the machine -- Claude Code joined by pid, Cursor agents
+ inferred from transcript activity -- beside GitHub Actions runs and open
+ pull requests across every clone, with failures pinned so a red build
+ cannot scroll away.
+ .
+ Both panes are drawn from one discovery layer (henhouse), so they cannot
+ disagree. Reads only local agent state and runs read-only git and gh. It
+ never writes to a tree, a registry or a session.
+
