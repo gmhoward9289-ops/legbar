@@ -17,6 +17,19 @@ already says the API may move.
   becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
   the same build. `release.yml` checks the normalisation on every tag.
 
+## v0.2.1 - 2026-08-16
+
+### Added
+- **The version is on the screen.** roost's stamp, ported: a dim `v0.2.1`
+  in the bottom-right corner — of the footer row in the full-screen view,
+  and of the last line of `--once` output. Same semantics as roost: it
+  rides whatever the last line is so it can never itself be clipped off,
+  and it is dropped rather than wrapped when fewer than two spare columns
+  remain, because a wrapped line scrolls the display.
+- **`--json` carries the version** as the object's first key, so anything
+  parsing the stream learns which schema it got without shelling out to
+  `--version`.
+
 ## v0.2.0 - 2026-08-16
 
 ### Added
