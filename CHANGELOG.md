@@ -17,7 +17,48 @@ already says the API may move.
   becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
   the same build. `release.yml` checks the normalisation on every tag.
 
-## Unreleased
+## v0.2.0 - 2026-08-16
+
+### Added
+- **Colour.** The full-screen view now draws in roost/leghorn's shared
+  palette: cyan bold names and pane titles, green/yellow/red context bars by
+  threshold, yellow git dirt and "waiting on you", red contested flags and
+  failed CI, dim de-emphasis for task text and quiet rows. The colour layer
+  is a span pass over the exact same `render()`-side line builders, so
+  `--once`, `--json` and the tests see byte-identical plain text.
+  `--no-color` and the `NO_COLOR` env var (no-color.org) disable it.
+- **Panes load independently, with a spinner.** Collection is split into the
+  local half (sessions, git, commits, subagents -- milliseconds) and the
+  GitHub sweep (tens of seconds across a fleet), each on its own background
+  thread and clock, the same split leghorn makes. The first frame paints
+  immediately and each pane shows an animated `| / - \` "collecting..."
+  until its own data lands -- the screen no longer sits frozen behind the
+  slowest section, and `g`/`r` keystrokes respond mid-sweep.
+- **Subagent rows say what the work is for.** The panel showed the raw
+  agent-id hash, which identified nothing. henhouse now harvests the short
+  `description` each Agent call was launched with from the parent
+  transcript's `toolUseResult` records (incrementally -- only appended bytes
+  are re-read), falling back to the opening line of the subagent's own task
+  prompt. Five siblings that all began "Finish a stranded work stream..."
+  now read "Finish Canada country data", "Finish Mexico country data", ...
+- **Sessions are labelled by their conversation, not just a checkout.**
+  The claims registry that feeds `task` is empty for nearly every real
+  session, so rows and the NEEDS YOU band said only `<repo>-<n> needs your
+  reply` -- nothing a reader could match against Claude Code's or Cursor's
+  own session list. When a row has no claim, henhouse now reads the first
+  real human message from the session's transcript
+  (`henhouse.session_topic()`), so WAITING lines carry the actual ask.
+
+### Fixed
+- **Session rows no longer render twice.** A leftover flat-list loop from a
+  botched merge drew every session once ungrouped and again under its
+  bucket; the duplicate loop, a duplicated `_stack_right`, duplicate
+  `_SESSION_FIXED` constants and a doubled state init in the curses loop are
+  all gone.
+- Header counts colour only the count itself; a trailing `(12m)` duration
+  stays dim instead of joining the red block.
+
+## v0.1.3 - 2026-08-16
 
 ### Added
 - **Cursor rows carry model and CTX% now.** The transcript-only lane could
