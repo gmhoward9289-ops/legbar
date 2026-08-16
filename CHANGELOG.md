@@ -17,6 +17,42 @@ already says the API may move.
   becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
   the same build. `release.yml` checks the normalisation on every tag.
 
+## Unreleased
+
+### Added
+- **Cursor rows carry model and CTX% now.** The transcript-only lane could
+  never fill them -- roost's recon measured 71/71 live JSONL files with no
+  `usage` keys -- so henhouse now also reads Cursor's own index:
+  `state.vscdb` → `composerHeaders`, opened read-only, gives `ctx_pct` from
+  Cursor's own meter, the composer name as a task fallback, and a fresher
+  liveness signal (`lastUpdatedAt` moves on turns that write no JSONL). The
+  model comes from the newest `Task` `tool_use.input.model` in the
+  transcript, the one place it appears. Without the DB the lane degrades to
+  exactly what it was. Override the path with `LEGBAR_CURSOR_STATE_DB`
+  (`ROOST_CURSOR_STATE_DB` honoured as legacy). Closes #13, the follow-up
+  deferred when #11 shipped.
+
+## v0.1.1 - 2026-08-16
+
+### Added
+- **Subagent and git cells on every session row.** henhouse already counted
+  active subagents and probed dirty/ahead/behind; the renderer now draws them
+  (`3`, `~2^1`, `clean`) and the header totals uncommitted trees and subagents
+  when non-zero. `--no-git` / `g` hides the git column rather than painting a
+  wall of dashes.
+- **COMMITS pane** from `henhouse.commit_feed()`, stacked under CI when wide
+  and third when narrow -- leghorn's third answer on the same canvas.
+- **Git probe for Cursor cwds**, so a contested Cursor checkout can show dirt
+  the same way its Claude peer does.
+- **Roost-style session buckets** (`WAITING ON YOU`, `NEAR LIMIT`,
+  `WORKING NOW`, collapsed `QUIET`) and a **SUBAGENTS** panel, beside
+  leghorn's **GITHUB** + **COMMITS** panes -- the union layout, not a thinner
+  flat list.
+
+### Fixed
+- CHANGELOG no longer claims CI-by-origin dedup is missing; `github_repos()`
+  already collapses `-wt-*` siblings (covered by `tests/test_henhouse_github.py`).
+
 ## v0.1.0 - 2026-08-09
 
 First cut. Both lanes render against real data on COOPER.
@@ -58,23 +94,3 @@ First cut. Both lanes render against real data on COOPER.
   carried no `usage` keys (see roost's `docs/cursor-on-disk.md`). roost reads
   `composerHeaders` from `state.vscdb`; legbar has not ported that path yet.
 
-## Unreleased
-
-### Added
-- **Subagent and git cells on every session row.** henhouse already counted
-  active subagents and probed dirty/ahead/behind; the renderer now draws them
-  (`3`, `~2^1`, `clean`) and the header totals uncommitted trees and subagents
-  when non-zero. `--no-git` / `g` hides the git column rather than painting a
-  wall of dashes.
-- **COMMITS pane** from `henhouse.commit_feed()`, stacked under CI when wide
-  and third when narrow — leghorn's third answer on the same canvas.
-- **Git probe for Cursor cwds**, so a contested Cursor checkout can show dirt
-  the same way its Claude peer does.
-- **Roost-style session buckets** (`WAITING ON YOU`, `NEAR LIMIT`,
-  `WORKING NOW`, collapsed `QUIET`) and a **SUBAGENTS** panel, beside
-  leghorn's **GITHUB** + **COMMITS** panes — the union layout, not a thinner
-  flat list.
-
-### Fixed
-- CHANGELOG no longer claims CI-by-origin dedup is missing; `github_repos()`
-  already collapses `-wt-*` siblings (covered by `tests/test_henhouse_github.py`).
