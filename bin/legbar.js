@@ -5,9 +5,12 @@
 //
 // npm is here because plenty of the people watching an agent fleet live in the
 // node ecosystem and `npm i -g legbar` is the install they will actually run.
-// macOS and Linux only: Windows legbar needs the windows-curses *pip*
-// dependency (see pyproject.toml), which npm has no way to deliver, so Windows
-// gets pip instead -- package.json's "os" field tells npm so.
+// Windows included: the full-screen view needs the windows-curses *pip*
+// dependency (see pyproject.toml), which npm has no way to deliver -- but
+// --once and --json need no curses at all, and legbar.py prints the one-line
+// pip command if the TUI is asked for without it. Blocking the whole install
+// via package.json's "os" field traded that sentence for npm's raw
+// EBADPLATFORM, which named the problem and not the fix.
 //
 // There is deliberately no postinstall Python check. A failing postinstall
 // would break `npm ci` in a project that merely lists legbar as a
@@ -23,23 +26,15 @@ const { spawn, spawnSync } = require('child_process');
 const SCRIPT = path.join(__dirname, '..', 'legbar.py');
 const MIN = [3, 9]; // matches requires-python in pyproject.toml
 
-// package.json's "os" field keeps npm from installing this on Windows, but a
-// forced install should still fail with a sentence rather than a curses
-// traceback from Python.
-//
-// pip, and only pip. There is no winget package: winget-releaser cannot
-// bootstrap a package identifier, so the sibling repos' winget jobs failed on
-// every release and were deleted. Pointing a stranded Windows user at a
-// `winget install` that has never existed is worse than pointing at nothing.
-if (process.platform === 'win32') {
-  process.stderr.write('legbar does not ship for Windows over npm.\n');
-  process.stderr.write('  pip install legbar windows-curses\n');
-  process.stderr.write('  or grab the frozen zip from the GitHub release:\n');
-  process.stderr.write('  https://github.com/gmhoward9289-ops/legbar/releases/latest\n');
-  process.exit(1);
-}
-
 const CANDIDATES = [['python3', []], ['python', []]];
+
+// The py launcher ships with python.org installs; the Microsoft Store's
+// `python` alias can be a stub that opens the Store instead of running, which
+// probe() rejects on exit code. Last, not first: a real python/python3 on
+// PATH is what the user chose.
+if (process.platform === 'win32') {
+  CANDIDATES.push(['py', ['-3']]);
+}
 
 const PROBE = 'import sys; print("%d.%d" % sys.version_info[:2])';
 
