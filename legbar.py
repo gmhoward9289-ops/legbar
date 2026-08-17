@@ -42,7 +42,7 @@ from pathlib import Path
 
 import henhouse
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 NAME = "legbar"
 
@@ -252,11 +252,14 @@ def waiting_on(r):
     if status in henhouse.ATTENTION:
         return "you", secs
     if status == "working":
-        return "cc" if r.get("source") == "claude" else "cu", secs
+        # Not "cc"/"cu" -- which tool it is already reads off the row's name
+        # prefix, and repeating it here cost two chars of task text on every
+        # working row. This cell answers only "which side is pending".
+        return "ai", secs
     return "", None
 
 
-def wait_cell(r, width=9):
+def wait_cell(r, width=7):
     who, secs = waiting_on(r)
     if not who:
         return "-".ljust(width)
@@ -350,6 +353,17 @@ def session_sort(r):
 
 ACTION_LIMIT = 5
 
+# How long a conversation must sit unanswered before NEEDS YOU flags it.
+#
+# A session waiting on you is not itself a problem -- it is the normal resting
+# state of a fleet you are working through one at a time. Flagging every one of
+# them the moment it appears trains the eye to ignore the flag, which costs the
+# band the only thing it is for. So a young wait is listed but quiet; only an
+# old one, where you have plausibly forgotten it, gets the marker and the
+# colour. Contested trees are exempt: those destroy work rather than delay it,
+# and are loud from the first frame.
+WAITING_LOUD_SECS = 20 * 60
+
 
 def actions(state):
     """Everything wanting a human, worst consequence first.
@@ -370,6 +384,7 @@ def actions(state):
     rendered line.
     """
     out = []
+    loud_after = state.get("waiting_loud_secs", WAITING_LOUD_SECS)
 
     # Contested trees, grouped -- three sessions in one checkout is ONE
     # problem, not three rows of the same problem.
@@ -405,6 +420,10 @@ def actions(state):
             "rank": 1, "kind": "WAITING",
             "subject": r.get("name") or "-",
             "detail": detail,
+            # Ranking is unchanged -- an old wait and a young one are the same
+            # class of problem and still sort together, oldest first. This only
+            # decides how hard the row shouts about it.
+            "loud": secs >= loud_after,
         })
 
     for e in state["ci"]:
@@ -426,9 +445,16 @@ def action_lines(state, width):
         return []
     out = ["NEEDS YOU", "-" * min(width, 9)]
     for it in items[:ACTION_LIMIT]:
-        # Two markers for the destructive class, one for the merely blocked --
-        # legible without colour, which a terminal may not have.
-        mark = "!!" if it["rank"] == 0 else (" !" if it["rank"] == 1 else "  ")
+        # Two markers for the destructive class, one for the merely blocked,
+        # none for a row that is only informational -- legible without colour,
+        # which a terminal may not have. colorize_band() reads exactly this
+        # marker, so the sigil and the colour cannot drift apart.
+        if it["rank"] == 0:
+            mark = "!!"
+        elif it["rank"] == 1 and it.get("loud", True):
+            mark = " !"
+        else:
+            mark = "  "
         out.append(clip("%s %-10s %-16s %s"
                         % (mark, it["kind"], clip(it["subject"], 16),
                            it["detail"]), width))
@@ -539,25 +565,36 @@ def bucket(r):
 
 # Fixed prefix before the free-text task (no status column -- the bucket label
 # and wait cell already say what status said). Keep in sync with _session_row.
-_SESSION_FIXED = 48
-_SESSION_FIXED_GIT = 58
+_SESSION_FIXED = 43
+_SESSION_FIXED_GIT = 53
+
+
+def src_label(r, width=12):
+    """Which tool, fused onto the front of the session name.
+
+    A standalone "cc"/"cu" column cost three chars of an already-starved task
+    column on every row. Folded in as a prefix it costs nothing extra, stays
+    visible on idle rows (where the wait cell says nothing), and still lands
+    at line[1:4] so colorize_sessions can pick a session row out by sight.
+    """
+    src = "cu-" if r.get("source") == "cursor" else "cc-"
+    return clip(src + (r.get("name") or "-"), width)
 
 
 def _session_row(r, width, show_git):
-    src = "cu" if r.get("source") == "cursor" else "cc"
     pct = r.get("context_pct")
     pct_s = "%3d%%" % round(pct) if pct is not None else "   -"
     flag = "!" if r.get("contested") else " "
     fixed = _SESSION_FIXED_GIT if show_git else _SESSION_FIXED
     task = clip(r.get("task") or r.get("project") or "", max(0, width - fixed))
     if show_git:
-        line = "%s%-2s %-12s %-4s %s %s %-9s %s %s %s" % (
-            flag, src, clip(r.get("name") or "-", 12),
+        line = "%s%-12s %-4s %s %s %-7s %s %s %s" % (
+            flag, src_label(r),
             short_model(r.get("model")), bar(pct), pct_s, wait_cell(r),
             sub_cell(r), git_cell(r), task)
     else:
-        line = "%s%-2s %-12s %-4s %s %s %-9s %s" % (
-            flag, src, clip(r.get("name") or "-", 12),
+        line = "%s%-12s %-4s %s %s %-7s %s" % (
+            flag, src_label(r),
             short_model(r.get("model")), bar(pct), pct_s, wait_cell(r), task)
     return clip(line, width)
 
@@ -827,23 +864,29 @@ def _session_row_spans(line, show_git):
     spans = []
     if line[:1] == "!":
         spans.append((0, 1, C_RED, True))
-    spans.append((1, 2, C_CYAN, False))                      # src (cc/cu)
-    spans.append((4, 12, C_CYAN, True))                       # name
-    spans.append((17, 4, C_DIM, False))                       # model
-    bc = _bar_color(_bar_pct(line[33:37]))
-    spans.append((22, 10, bc, False))                         # context bar
-    spans.append((33, 4, bc, bc in (C_RED, C_YELLOW)))         # pct
-    wait = line[38:47].strip()
+    # The name column is "cc-"/"cu-" + name. The prefix is colour-coded by
+    # tool so a fleet reads as two populations at a glance, without anyone
+    # having to parse two letters per row: Cursor takes the loud magenta
+    # because it is the exception worth spotting, Claude the calmer blue.
+    # Both are bold -- the bright variant of each pair, which is legible
+    # against the dark background the rest of the palette assumes.
+    spans.append((1, 3, C_MAGENTA if line[1:4] == "cu-" else C_BLUE, True))
+    spans.append((4, 9, C_CYAN, True))                        # name
+    spans.append((14, 4, C_DIM, False))                       # model
+    bc = _bar_color(_bar_pct(line[30:34]))
+    spans.append((19, 10, bc, False))                         # context bar
+    spans.append((30, 4, bc, bc in (C_RED, C_YELLOW)))         # pct
+    wait = line[35:42].strip()
     if wait and wait != "-":
-        spans.append((38, 9, C_YELLOW if wait.startswith("you") else C_GREEN,
+        spans.append((35, 7, C_YELLOW if wait.startswith("you") else C_GREEN,
                       wait.startswith("you")))
     if show_git:
-        git_txt = line[51:57].strip()
+        git_txt = line[46:52].strip()
         gc = C_DIM if git_txt in ("", "-", "clean") else C_YELLOW
-        spans.append((51, 6, gc, gc == C_YELLOW))
-        task_start = 58
+        spans.append((46, 6, gc, gc == C_YELLOW))
+        task_start = 53
     else:
-        task_start = 48
+        task_start = 43
     spans.append((task_start, max(0, len(line) - task_start), C_DIM, False))
     return spans
 
@@ -950,7 +993,7 @@ def colorize_sessions(state, width):
     show_git = bool(state.get("use_git", True))
     return colorize_block(
         session_lines(state, width),
-        row_is=lambda l: l[:1] in (" ", "!") and l[1:3] in ("cc", "cu"),
+        row_is=lambda l: l[:1] in (" ", "!") and l[1:4] in ("cc-", "cu-"),
         row_spans=lambda l: _session_row_spans(l, show_git))
 
 
@@ -1256,9 +1299,19 @@ def main(argv=None):
                     help="disable colour output in the full-screen view")
     ap.add_argument("-i", "--interval", type=float, default=5.0,
                     help="seconds between refreshes in the full-screen view")
+    ap.add_argument("--waiting-alert", type=float, default=20.0,
+                    metavar="MINUTES",
+                    help="minutes a session must wait before NEEDS YOU flags "
+                         "it loudly; younger waits are still listed, just "
+                         "quiet (default: 20, 0 flags every wait)")
     ap.add_argument("--version", action="version",
                     version="%s %s" % (NAME, __version__))
     args = ap.parse_args(argv)
+    # Display config, not collection config, so it rides on the module rather
+    # than being threaded through collect()/Model on every refresh. Set once,
+    # at startup, before anything renders.
+    global WAITING_LOUD_SECS
+    WAITING_LOUD_SECS = max(0.0, args.waiting_alert) * 60
 
     if args.json:
         # version first: anything programmatic reading this stream should

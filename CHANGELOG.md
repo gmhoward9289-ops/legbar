@@ -17,6 +17,47 @@ already says the API may move.
   becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
   the same build. `release.yml` checks the normalisation on every tag.
 
+## v0.3.0 - 2026-08-16
+
+Minor, not patch: `--waiting-alert` is a new flag, and NEEDS YOU changed what
+it flags by default.
+
+### Changed
+- **Session rows give five more characters to the task column.** The standalone
+  `cc`/`cu` column is gone; the tool is now a prefix on the session name
+  (`cc-heron-op~`, `cu-c5468eb1`), which costs nothing extra and — unlike the
+  old column — keeps attribution on idle rows too. The wait cell stopped
+  repeating it: a row the model is working now reads `ai 3s` rather than
+  `cc 3s`, which let the cell shrink from 9 to 7 (`henhouse.ago()` is at most
+  three characters below 100 days, so `you 99d` still fits). `_SESSION_FIXED`
+  drops 48 → 43 and `_SESSION_FIXED_GIT` 58 → 53, so an 80-column terminal
+  gains about 17% more task text. Names lose three characters to the prefix.
+  Row detection in `colorize_sessions` was tightened to `line[1:4]` rather than
+  re-anchored, because the prefix lands in exactly the bytes the old `cc`/`cu`
+  column occupied.
+- **The tool prefix is colour-coded**, so a fleet reads as two populations
+  without anyone parsing two letters per row: bright magenta for `cu-`, which
+  is the exception worth spotting, bright blue for `cc-`. Both are bold — the
+  bright variant of each curses pair — replacing the unbold magenta the prefix
+  first shipped with, which was too dark against the background.
+
+- **NEEDS YOU stopped shouting about every wait.** A conversation waiting on
+  you is the normal resting state of a fleet worked through one at a time, and
+  flagging each one the moment it appeared taught the eye to skip the flag —
+  costing the band the only thing it is for. A wait younger than the threshold
+  is now listed but unmarked and uncoloured; only an older one takes the `!`
+  and the yellow. Ranking is untouched: quiet rows still sort and count as
+  waits. Contested trees are exempt and stay loud from the first frame.
+
+### Added
+- **`--waiting-alert MINUTES`** sets that threshold (default 20; `0` restores
+  the old flag-everything behaviour).
+- **First test coverage for the colour span layer.** Every span is a hardcoded
+  offset into a format string, and nothing pinned them, so a width change that
+  nobody mirrored painted the wrong bytes rather than failing. Three tests now
+  hold the prefix colours, the column offsets, and the agreement between the
+  `_SESSION_FIXED` clip budget and where the task text actually starts.
+
 ## v0.2.1 - 2026-08-16
 
 ### Added

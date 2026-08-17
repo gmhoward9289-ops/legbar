@@ -13,14 +13,29 @@ legbar draws both lanes on one canvas.
 ```
 legbar  5 sessions | 1 cursor | 1 need input | 15 ci red | 125k held | 18:37:00
 
-SESSIONS                                                    CI / PRS
---------                                                    --------
-cc heron-ops-3c FB5  ###-------  32% needsinput  dev        X  roost          ci
-cc swamp-ops-ad OP5  ###-------  25% working     dev        X  roost          #56 ci: skip winget~
-cc heron-ops-16 FB5  #---------  10% working     dev        X  copilot-money~ Tests
-cc claude-10    OP5  #---------   8% idle        Claude     >  leghorn        release
-cu c5468eb1     -                  - idle        dev        .  leghorn        #61 checks pending
+NEEDS YOU                                                                       GITHUB
+---------                                                                       ------
+!! CONTESTED  heron-ops     2 sessions in one working copy: c5468eb1, heron~     X  roost          ci
+ ! WAITING    heron-ops-3c  needs your reply -- 12m  -- fix contested false~     X  roost          #56 ci: skip winget~
+   CI RED     roost         ci                                                  >  leghorn        release
+
+WAITING ON YOU
+--------------
+!cc-heron-op~ FB5  ###-------  32% you 12m 3  ~2^1   fix contested false alarm
+ cc-swamp-op~ OP5  ##--------  25% you 12m -  ~1     draft discussions packet
+
+WORKING NOW
+-----------
+ cc-heron-op~ FB5  #---------  10% ai 3s   2  clean  survey henhouse drift
+
+STARTING
+--------
+!cu-c5468eb1  -                  - ai 40s  -  -      union TUI mockup
 ```
+
+Each session row leads with the tool that owns it — `cc-` for Claude Code,
+`cu-` for Cursor — then model, context bar, who is pending (`you` or `ai`) and
+for how long, subagent count, working-tree state, and what it is doing.
 
 ![legbar watching a fleet: two contested trees, sessions waiting on a human, and red CI that cannot scroll away](demo/legbar-demo.gif)
 
@@ -40,7 +55,7 @@ reading only Claude's session directory cannot see that collision at all.
 **SESSIONS** — every live agent on the machine. Claude Code sessions are joined
 by pid against `~/.claude/sessions/<pid>.json`, with model, context burn, and
 status read from the session's own JSONL transcript. **Cursor agents appear
-too**, marked `cu` — Cursor writes no session marker and no claim, so a fleet
+too**, marked with a `cu-` name prefix — Cursor writes no session marker and no claim, so a fleet
 view that only reads Claude's session directory is blind to every Cursor agent
 running beside it.
 
@@ -87,9 +102,17 @@ legbar --once       # render one frame and exit (pipes, CI, screenshots)
 legbar --json       # the joined state, for piping somewhere else
 legbar --no-git     # skip git probing if it is ever slow
 legbar --no-ci      # skip the gh sweep (offline, or when it is slow)
+legbar --waiting-alert 45   # only shout about waits older than 45 minutes
 ```
 
 In the full-screen view: `q` quit, `g` toggle git probing, `r` refresh now.
+
+**NEEDS YOU** is deliberately hard to tune out. A session waiting on you is the
+normal resting state of a fleet you are working through one at a time, so a
+young wait is listed but unmarked and uncoloured; only one past
+`--waiting-alert` (default 20 minutes) takes the `!` and the colour, on the
+theory that by then you have forgotten it. Contested trees are exempt — they
+destroy work rather than delay it, and are loud from the first frame.
 
 ## Configuration
 

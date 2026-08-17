@@ -1,4 +1,4 @@
-.TH LEGBAR 1 "August 2026" "legbar 0.2.2" "User Commands"
+.TH LEGBAR 1 "August 2026" "legbar 0.3.0" "User Commands"
 .SH NAME
 legbar \- one screen for the whole fleet: live agent sessions beside GitHub CI
 .SH SYNOPSIS
@@ -23,8 +23,10 @@ is a working CLI in its own right.
 .PP
 Claude Code sessions are joined by pid against the live-session markers, with
 model, context burn and status read from the session's own JSONL transcript.
-Cursor agents appear too, marked
-.BR cu .
+Cursor agents appear too, marked by a
+.BR cu-
+prefix on the session name (Claude Code sessions take
+.BR cc- ).
 Their liveness is inferred rather than probed \- Cursor writes no pid to join
 against, so a row means \fIthis transcript moved recently\fR, which is a weaker
 signal and is labelled as one.
@@ -57,8 +59,20 @@ Skip the per-tree git probes. Toggle at runtime with \fBg\fR.
 .B \-\-no\-ci
 Skip the gh sweep entirely. Useful offline, or when the API is slow.
 .TP
+.B \-\-no\-color
+Disable colour in the full-screen view. \fBNO_COLOR\fR does the same.
+.TP
 .BR \-i ", " \-\-interval " " \fISECS\fR
 Seconds between refreshes in the full-screen view (default 5).
+.TP
+.B \-\-waiting\-alert " " \fIMINUTES\fR
+How long a conversation must sit unanswered before
+.B NEEDS YOU
+marks it with \fB!\fR and colours it (default 20). A younger wait is still
+listed, just quiet \- a session waiting on you is the normal resting state of a
+fleet, and flagging every one of them on sight teaches the eye to skip the
+flag. \fB0\fR flags every wait. Contested trees are exempt and are loud from
+the first frame.
 .TP
 .B \-\-version
 Print the version and exit.
