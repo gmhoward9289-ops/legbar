@@ -26,7 +26,7 @@ class Legbar < Formula
   url "https://github.com/gmhoward9289-ops/legbar/releases/download/v0.3.1/legbar-0.3.1.tar.gz"
   sha256 "PLACEHOLDER_FILLED_BY_RELEASE_WORKFLOW"
   version "0.3.1"
-  license "MIT"
+  license "Apache-2.0"
 
   depends_on "python@3.13"
 

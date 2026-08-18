@@ -180,4 +180,4 @@ Cursor. It is a working CLI in its own right (`python henhouse.py`).
 
 ## License
 
-MIT
+Apache-2.0
