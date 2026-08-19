@@ -17,6 +17,22 @@ already says the API may move.
   becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
   the same build. `release.yml` checks the normalisation on every tag.
 
+## v0.3.3 - 2026-08-18
+
+### Changed
+- Added `dependabot.yml` (drift-check remediation).
+
+## v0.3.2 - 2026-08-18
+
+### Fixed
+- Stale MIT license references left over from the Apache 2.0 relicense in
+  v0.3.1.
+
+## v0.3.1 - 2026-08-17
+
+### Changed
+- Relicensed to Apache 2.0.
+
 ## v0.3.0 - 2026-08-16
 
 Minor, not patch: `--waiting-alert` is a new flag, and NEEDS YOU changed what
