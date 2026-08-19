@@ -42,7 +42,7 @@ from pathlib import Path
 
 import henhouse
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 
 NAME = "legbar"
 

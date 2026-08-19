@@ -1,6 +1,6 @@
 {
   "name": "legbar",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "One screen for the whole fleet: live agent sessions beside GitHub CI",
   "keywords": [
     "claude",
