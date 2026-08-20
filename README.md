@@ -2,6 +2,8 @@
 
 # legbar
 
+[![Discussions](https://img.shields.io/github/discussions/gmhoward9289-ops/legbar)](https://github.com/gmhoward9289-ops/legbar/discussions)
+
 One screen for the whole fleet: **live agent sessions beside GitHub CI**, drawn
 from a single discovery layer so the two panes can never disagree.
 
@@ -174,6 +176,8 @@ modes. It never writes to a repo.
   its own: sessions joined to worktrees and real git state, CI, and a commit
   feed.
 - **legbar** — both lanes on one screen, over one discovery layer.
+
+Questions in the open: [Discussions](https://github.com/gmhoward9289-ops/legbar/discussions).
 
 `henhouse.py` is that discovery layer: sessions, transcripts, git, GitHub, and
 Cursor. It is a working CLI in its own right (`python henhouse.py`).
