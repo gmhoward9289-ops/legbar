@@ -7,7 +7,10 @@ legbar \- one screen for the whole fleet: live agent sessions beside GitHub CI
 [\fB\-\-json\fR]
 [\fB\-\-no\-git\fR]
 [\fB\-\-no\-ci\fR]
+[\fB\-\-no\-color\fR]
 [\fB\-i\fR \fISECS\fR]
+[\fB\-\-waiting\-alert\fR \fIMINUTES\fR]
+[\fB\-\-version\fR]
 .SH DESCRIPTION
 .B legbar
 is a full-screen curses view that puts both fleet lanes on one canvas. The
@@ -18,8 +21,8 @@ pinned so a red build cannot scroll away.
 Both panes are drawn from a single discovery layer,
 .BR henhouse ,
 so the two views cannot disagree about what is running.
-.BR henhouse (1)
-is a working CLI in its own right.
+.B henhouse.py
+is a working CLI in its own right (\fBpython henhouse.py\fR).
 .PP
 Claude Code sessions are joined by pid against the live-session markers, with
 model, context burn and status read from the session's own JSONL transcript.
@@ -78,8 +81,9 @@ the first frame.
 Print the version and exit.
 .SH KEYS
 .TP
-.B q / esc
-quit
+.B q
+quit. Esc is deliberately ignored: on Windows PDCurses can deliver a false Esc
+and would otherwise dump you out of the view.
 .TP
 .B r
 refresh everything now
@@ -107,6 +111,11 @@ Claude Code's live-session markers, one <pid>.json per session (default
 Claude Code's JSONL transcripts, keyed by mangled cwd (default
 ~/.claude/projects). Legacy: \fBCLAUDE_PROJECTS_DIR\fR.
 .TP
+.B LEGBAR_STATE_DIR
+Claims registry directory (default ~/Claude/worktrees). \fBregistry.json\fR
+inside it feeds contested-tree detection and claimed-task labels. Legacy:
+\fBCCWORK_STATE_DIR\fR.
+.TP
 .B LEGBAR_CURSOR_HOME
 Cursor's agent transcripts (default ~/.cursor). Legacy:
 \fBCURSOR_AGENT_HOME\fR.
@@ -114,6 +123,11 @@ Cursor's agent transcripts (default ~/.cursor). Legacy:
 .B LEGBAR_CURSOR_MAX_IDLE_SECS
 How far back a Cursor transcript still counts as a live agent (default 86400).
 Legacy: \fBROOST_CURSOR_MAX_IDLE_SECS\fR.
+.TP
+.B LEGBAR_CURSOR_STATE_DB
+Cursor's global SQLite index (\fBstate.vscdb\fR). When present, henhouse reads
+\fBcomposerHeaders\fR for CTX% and composer names. Platform default under the
+Cursor user data dir. Legacy: \fBROOST_CURSOR_STATE_DB\fR.
 .TP
 .B LEGBAR_BACKENDS
 Which discovery lanes run at all (default \fBclaude,cursor\fR). Legacy:
