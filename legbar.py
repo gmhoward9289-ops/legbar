@@ -502,31 +502,6 @@ def session_lines(state, width):
                         else "no live sessions", width))
         return out
     show_git = bool(state.get("use_git", True))
-    fixed = _SESSION_FIXED_GIT if show_git else _SESSION_FIXED
-    for r in state["sessions"]:
-        src = "cu" if r["source"] == "cursor" else "cc"
-        pct = r.get("context_pct")
-        pct_s = "%3d%%" % round(pct) if pct is not None else "   -"
-        # A contested tree is two live sessions editing one working copy, which
-        # is the collision that actually loses work. It outranks anything else
-        # on the row, so it gets the leading glyph rather than a column.
-        flag = "!" if r.get("contested") else " "
-        task = clip(r.get("task") or r.get("project") or "",
-                    max(0, width - fixed))
-        if show_git:
-            line = "%s%-2s %-12s %-4s %s %s %-9s %-11s %s %s %s" % (
-                flag, src, clip(r.get("name") or "-", 12),
-                short_model(r.get("model")), bar(pct), pct_s, wait_cell(r),
-                clip(r.get("status") or "-", 11),
-                sub_cell(r), git_cell(r), task)
-        else:
-            line = "%s%-2s %-12s %-4s %s %s %-9s %-11s %s" % (
-                flag, src, clip(r.get("name") or "-", 12),
-                short_model(r.get("model")), bar(pct), pct_s, wait_cell(r),
-                clip(r.get("status") or "-", 11), task)
-        out.append(clip(line, width))
-
-    show_git = bool(state.get("use_git", True))
     grouped = {}
     for r in rows:
         b = bucket(r)
@@ -625,11 +600,6 @@ def commit_lines(state, width):
 
 
 def _stack_right(ci, commits):
-    """CI on top, COMMITS below, blank line between the two pane titles."""
-    return list(ci) + [""] + list(commits)
-
-
-def _stack_right(ci, commits):
     """GITHUB on top, COMMITS below."""
     return list(ci) + [""] + list(commits)
 
@@ -642,8 +612,6 @@ def _stack_left(sessions, subagents):
 def render(state, width):
     """Union canvas: roost buckets + subagents | leghorn github + commits."""
     band = action_lines(state, width)
-    left = _stack_left(session_lines(state, width), subagent_lines(state, width))
-    right = _stack_right(ci_lines(state, width), commit_lines(state, width))
 
     if width < MIN_SPLIT:
         # Narrow: NEEDS YOU, roost board, subagents, then leghorn panes.
