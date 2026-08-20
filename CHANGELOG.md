@@ -213,8 +213,8 @@ First cut. Both lanes render against real data on COOPER.
   the discovery layer.
 
 ### Known gaps
-- leghorn and roost do not import this copy of `henhouse.py` yet — that
-  consolidation is the next family-wide step, and until it lands the drift the
-  shared layer was meant to end is only fixed on legbar's side.
-  (Cursor model/CTX% via `composerHeaders` landed later in v0.1.3.)
+- roost does not import this copy of `henhouse.py` yet — it keeps its own
+  collectors inside `roost.py`. leghorn now takes this file as the shared
+  discovery layer (see the companion PR on leghorn). Cursor model/CTX% via
+  `composerHeaders` landed later in v0.1.3.
 

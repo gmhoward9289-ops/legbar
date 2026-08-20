@@ -31,7 +31,9 @@ a tree. Transcripts are stdlib-only to read, so status and context need no
 external binary and work on every platform. git-roost is optional -- without it
 the git columns drop, as with --no-git.
 
-This is leghorn's data layer first and a command second; leghorn imports it.
+Shared discovery layer for legbar and leghorn (legbar is the canonical copy;
+leghorn imports the same file). Config overrides are LEGBAR_*; the older
+LEGHORN_* / CCWORK_* / CLAUDE_* / CURSOR_* names are still honoured.
 """
 
 from __future__ import annotations
