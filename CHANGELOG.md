@@ -216,7 +216,5 @@ First cut. Both lanes render against real data on COOPER.
 - leghorn and roost do not import this copy of `henhouse.py` yet — that
   consolidation is the next family-wide step, and until it lands the drift the
   shared layer was meant to end is only fixed on legbar's side.
-- Cursor rows still lack model and context %: transcript JSONL on COOPER
-  carried no `usage` keys (see roost's `docs/cursor-on-disk.md`). roost reads
-  `composerHeaders` from `state.vscdb`; legbar has not ported that path yet.
+  (Cursor model/CTX% via `composerHeaders` landed later in v0.1.3.)
 
