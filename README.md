@@ -104,10 +104,13 @@ legbar --once       # render one frame and exit (pipes, CI, screenshots)
 legbar --json       # the joined state, for piping somewhere else
 legbar --no-git     # skip git probing if it is ever slow
 legbar --no-ci      # skip the gh sweep (offline, or when it is slow)
+legbar --no-color   # plain text in the full-screen view (NO_COLOR also works)
+legbar --interval 2 # refresh every N seconds (default 5)
 legbar --waiting-alert 45   # only shout about waits older than 45 minutes
 ```
 
 In the full-screen view: `q` quit, `g` toggle git probing, `r` refresh now.
+Esc does not quit — on Windows PDCurses can deliver a false Esc.
 
 **NEEDS YOU** is deliberately hard to tune out. A session waiting on you is the
 normal resting state of a fleet you are working through one at a time, so a
@@ -127,8 +130,10 @@ configured; the new name wins when both are set.
 | `LEGBAR_REPOS_ROOT` | `~/GitHub` | where the clones live |
 | `LEGBAR_SESSIONS_DIR` | `~/.claude/sessions` | live-session markers |
 | `LEGBAR_PROJECTS_DIR` | `~/.claude/projects` | session transcripts |
+| `LEGBAR_STATE_DIR` | `~/Claude/worktrees` | claims registry (`registry.json`) |
 | `LEGBAR_CURSOR_HOME` | `~/.cursor` | Cursor's agent transcripts |
 | `LEGBAR_CURSOR_MAX_IDLE_SECS` | `86400` | how far back a Cursor agent counts as live |
+| `LEGBAR_CURSOR_STATE_DB` | Cursor `state.vscdb` | composerHeaders (CTX% / names) |
 | `LEGBAR_BACKENDS` | `claude,cursor` | which discovery lanes run at all |
 
 ## Two honest caveats

@@ -17,6 +17,25 @@ already says the API may move.
   becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
   the same build. `release.yml` checks the normalisation on every tag.
 
+## v0.3.6 - 2026-08-20
+
+### Changed
+- README links GitHub Discussions (badge + family section).
+
+## v0.3.5 - 2026-08-20
+
+### Changed
+- Retired the v0.1.0 known-gap that still claimed Cursor rows lacked model and
+  CTX% — `composerHeaders` landed in v0.1.3. The remaining gap is roost still
+  keeping its own collectors instead of this `henhouse.py`.
+- Module docstring notes leghorn already takes this file as the shared
+  discovery layer.
+
+## v0.3.4 - 2026-08-19
+
+### Changed
+- Backfilled CHANGELOG entries for v0.3.1–v0.3.3 (release metadata only).
+
 ## v0.3.3 - 2026-08-18
 
 ### Changed
@@ -74,10 +93,10 @@ it flags by default.
   hold the prefix colours, the column offsets, and the agreement between the
   `_SESSION_FIXED` clip budget and where the task text actually starts.
 
-## v0.2.1 - 2026-08-16
+## v0.2.2 - 2026-08-16
 
 ### Added
-- **The version is on the screen.** roost's stamp, ported: a dim `v0.2.1`
+- **The version is on the screen.** roost's stamp, ported: a dim `v0.2.2`
   in the bottom-right corner — of the footer row in the full-screen view,
   and of the last line of `--once` output. Same semantics as roost: it
   rides whatever the last line is so it can never itself be clipped off,
@@ -86,6 +105,14 @@ it flags by default.
 - **`--json` carries the version** as the object's first key, so anything
   parsing the stream learns which schema it got without shelling out to
   `--version`.
+
+## v0.2.1 - 2026-08-16
+
+### Added
+- **Winget publishing** and README coverage of every install channel that
+  ships from the same release (pipx/pip, npm, Homebrew, winget, apt, Windows
+  `.exe` zip).
+- Refreshed demo GIFs against the staged fleet.
 
 ## v0.2.0 - 2026-08-16
 

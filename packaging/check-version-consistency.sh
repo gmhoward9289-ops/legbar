@@ -79,6 +79,12 @@ npm_version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\
               package.json | head -1)
 report "package.json version" "$npm_version" "$NPM_WANT"
 
+# --- CHANGELOG: newest release heading must match __version__ -----------------
+# Version-bearing files can stay in lockstep while CHANGELOG lags (v0.3.4–v0.3.6
+# shipped with no headings). Fail the bump PR, not the next reader.
+changelog_version=$(sed -n 's/^## v\([0-9][^ ]*\).*/\1/p' CHANGELOG.md | head -1)
+report "CHANGELOG.md newest ## v" "$changelog_version" "$VERSION"
+
 # --- --version output ---------------------------------------------------------
 cli_version=$(python3 legbar.py --version 2>&1 | sed -n 's/^legbar\(\.py\)\{0,1\} \(.*\)$/\2/p')
 report "legbar --version" "$cli_version" "$VERSION"
@@ -88,6 +94,7 @@ if [ "$fail" -ne 0 ]; then
 
 Version drift. Every artifact above must say $VERSION.
 
+  CHANGELOG.md         ## v$VERSION - <date>   (newest release heading)
   legbar.1             .TH LEGBAR 1 "<date>" "legbar $VERSION" "User Commands"
   package.json         "version": "$NPM_WANT"   (npm needs three components)
   packaging/legbar.rb  url     ...releases/download/v$VERSION/legbar-$VERSION.tar.gz
