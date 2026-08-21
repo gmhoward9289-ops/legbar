@@ -78,6 +78,9 @@ jobs:
       - name: Check the man page, formula and package.json match __version__
         run: packaging/check-version-consistency.sh
 
+      - name: Check the apt Pages landing page is still published
+        run: packaging/check-apt-pages.sh
+
       # PEP 440 normalises the version before it reaches the wheel filename --
       # "0.1.0-alpha" would become "0.1.0a0", so a raw string comparison
       # against __version__ fails on a perfectly valid prerelease while a
@@ -373,6 +376,15 @@ jobs:
               exit 1
             fi
           fi
+
+      # GitHub Pages 404s a branch that is only an apt tree: there is no
+      # index.html, and Jekyll will not serve the rest as a static site without
+      # .nojekyll. Rewrite both on every publish so a future tag cannot drop
+      # them the way a bootstrap-only copy would.
+      - name: Write the Pages landing page
+        run: |
+          touch gh-pages/.nojekyll
+          cp src/packaging/apt/index.html gh-pages/index.html
 
       - name: Rebuild the package index
         working-directory: gh-pages

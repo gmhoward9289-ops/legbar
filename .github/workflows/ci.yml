@@ -129,6 +129,12 @@ jobs:
       - name: Assert every artifact agrees on __version__
         run: bash packaging/check-version-consistency.sh
 
+      # The apt-repo job is the only writer of gh-pages. If it stops copying
+      # index.html / .nojekyll, Pages 404s the directory root even while the
+      # signed repo is intact. Catch that on the PR, not the next visitor.
+      - name: Assert the apt Pages landing page is still published
+        run: bash packaging/check-apt-pages.sh
+
       - name: Assert the output stays ASCII
         # Block-drawing characters mojibake in the Windows console. This is a
         # promise the README makes and the tests assert per-line; this catches

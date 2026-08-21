@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>legbar apt repository</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 40em; margin: 3em auto; padding: 0 1em; color: #1a1a1a; }
+  pre { background: #f4f4f4; padding: 1em; overflow-x: auto; border-radius: 6px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  a { color: #0645ad; }
+</style>
+</head>
+<body>
+<h1>legbar apt repository</h1>
+<p>
+  Signed apt repository for
+  <a href="https://github.com/gmhoward9289-ops/legbar">legbar</a>
+  &mdash; one screen for the whole fleet: live agent sessions beside GitHub CI.
+</p>
+<pre><code>curl -fsSL https://gmhoward9289-ops.github.io/legbar/legbar-archive-keyring.asc | sudo gpg --dearmor -o /usr/share/keyrings/legbar-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/legbar-archive-keyring.gpg] https://gmhoward9289-ops.github.io/legbar stable main" | sudo tee /etc/apt/sources.list.d/legbar.list
+sudo apt update
+sudo apt install legbar</code></pre>
+<p>
+  This repo publishes one architecture (<code>all</code>) and one suite
+  (<code>stable</code>) &mdash; legbar is stdlib-only Python, so there is
+  nothing else to vary. Every release is signed with a dedicated key kept
+  only in the legbar repo's GitHub Actions secrets; the public half is
+  <a href="legbar-archive-keyring.asc">legbar-archive-keyring.asc</a>.
+</p>
+</body>
+</html>
