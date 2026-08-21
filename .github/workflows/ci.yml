@@ -42,6 +42,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install windows-curses
         if: runner.os == 'Windows'
@@ -88,6 +90,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       # Stdlib-only is a promise this repo makes in its README and pyproject,
       # and the sibling repos enforce it the same way: the only third-party
@@ -139,3 +143,12 @@ jobs:
                       raise SystemExit(f"{f}:{i} non-ASCII: {line.strip()[:60]}")
           print("ascii-only: ok")
           PY
+
+  codespell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: codespell-project/actions-codespell@v2
+        with:
+          path: legbar.py,henhouse.py,docs,.
+          skip: .git,*.pyc,__pycache__,tests/fixtures
