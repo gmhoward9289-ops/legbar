@@ -4,31 +4,31 @@ Hash: SHA512
 Architectures: all
 Codename: stable
 Components: main
-Date: Thu, 20 Aug 2026 17:09:27 +0000
+Date: Sat, 22 Aug 2026 00:12:15 +0000
 Description: one screen for the whole fleet: live agent sessions beside GitHub CI
 Label: legbar
 Origin: legbar
 Suite: stable
 MD5Sum:
- eed2feaa221e918c64c9658b825ecdbe              216 Release
- d64c51834d109e59f79f8493f6a2d75b            15470 main/binary-all/Packages
- fe0b7fc01796c68081e7116f84fb05ce             3081 main/binary-all/Packages.gz
+ 67a607589988a3b25227fb69f9648fd6              216 Release
+ aa1bfca594f2fe587cdbe2d7a8335071            15470 main/binary-all/Packages
+ 3995fbf49f7f5996bb47dc01fe12702b             3079 main/binary-all/Packages.gz
 SHA1:
- 9d13cde8af531fc56e5501d8a1af35bd512c01c3              216 Release
- 89dd546b327167dcf08ef3d0121fa1cac5f76337            15470 main/binary-all/Packages
- 1f5a73301359f9fe8e36aa3f9efc42887076b7e8             3081 main/binary-all/Packages.gz
+ 888dd5e28b39d774d91f02de05b6580664966310              216 Release
+ 9737283d456dd565c4e36fb8d8baca288ea91470            15470 main/binary-all/Packages
+ 392b8a296de5744a344564a027413852b4346b60             3079 main/binary-all/Packages.gz
 SHA256:
- 0a2917307aff53257796525efe1144a0bf2f9447e013a11d6fe8f34c9e9d27ca              216 Release
- 72e7c5110861701502c202029ad0562752cc7af0ec3f81b9cf9b7774a4d22604            15470 main/binary-all/Packages
- ddde613d2047b8634126bfe2f95d9d576897d2849b0be8079a01a5e4972cc0ab             3081 main/binary-all/Packages.gz
+ cd38ec15b0d0bf2ab70f6fc77ebe9956f870b84c2669d8a7a5838818213fdb21              216 Release
+ ad8d1aec79935e43bcdfe3fc3c7d851395bb2505065fdb03afee0e35e3fea108            15470 main/binary-all/Packages
+ 401756303b9a01109a474839898037918472661cff4e4c1863fc4e5632a8e8e8             3079 main/binary-all/Packages.gz
 SHA512:
- f3ea6763b58bf2447ad54b6aa74a189051ed65326d9002f487737852479208f619a6ed51acdd97f8cfcbf01f0970fabc5f9bee79b2dd53a4b6df5efae110da1d              216 Release
- 08c303618191c2e6ee2c15e91bcc1d24c1f1c8ab294736914d41915710908c62e8a965c5d49baab1137e7cb0cda1cf555294386dcc7b7c6eb3d0ae991b050761            15470 main/binary-all/Packages
- e464e95b512f70b2eaccdc243110f59a287c41ae5d00a5c25ece7daadbc041d6e33d0ed025ac0d5a827510708cfaf09c78ac241208581d4c1fa1295c6884ff41             3081 main/binary-all/Packages.gz
+ d59fd41c2d3410046c0b6457a8c523d11830010fdbe73748aceca017dd9af73791b4dd73dfd236c0c2a54b9172424e3a4f0705c91c2829ed5a0ec7021b7ccd0d              216 Release
+ 5d51eaa806d4d9f9c5917d91b4da531859399a356d02833b4d6f85c06e914a12ff47a0f3e0fad682cdf469402a27703e4aafd59549c3910d4ca240974757cd19            15470 main/binary-all/Packages
+ 1acb5e55bca975fbcd1dca680f2fca17dcfabc5a98175de2c283ebc49404394848d4b311d8c07264c8fa3f2e2d548ed196a3ee123993daa79e365a2e931c198a             3079 main/binary-all/Packages.gz
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQQ+2rf+r+yxuFLabbbcqiIE8bSWNwUCaoc0xwAKCRDcqiIE8bSW
-N9fwAQCKkqkndlNffvY55EC4ACdZNhLVK6B44sewHqBfB8MWcgD8CCZnHJTOyt5S
-Bmz8TTijFor0bYSoARDqhxtRTImhmQo=
-=MsGQ
+iHUEARYKAB0WIQQ+2rf+r+yxuFLabbbcqiIE8bSWNwUCaojpXwAKCRDcqiIE8bSW
+N/M1AP4vlcMAQmSLgAGjqZfjOHWmN5FTOCWk9U3pUp6shpgLdQD/c6asPR/yIWi3
+OFzppxQMSMYKtmPi4QHVexoIGky7ogA=
+=ttQ4
 -----END PGP SIGNATURE-----

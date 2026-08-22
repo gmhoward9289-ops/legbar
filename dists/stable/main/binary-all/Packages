@@ -319,11 +319,11 @@ Maintainer: George M. Howard <dev@swamplink.com>
 Depends: python3 (>= 3.9)
 Recommends: gh, git
 Filename: pool/main/l/legbar/legbar_0.3.6_all.deb
-Size: 41404
-MD5sum: 1f156f1b8db1833ef62beeb2aa622514
-SHA1: 8c566dc570ed65f336807286e56455a792f0c13e
-SHA256: 88b7361eeb937079934fec88abf8637b663a7c8d5c26609aba219a2938099a29
-SHA512: 0deb2a2fdc24fed182e093c5384ddaf239c6064b86a247ceebfe71810a0f0e765ee4bc2b989280b13ffc3e4b625e1974b0b784b54e48740c56b07a220203e995
+Size: 41674
+MD5sum: 6e83a9ac863c77954321dad6585afd93
+SHA1: bb2d355e88f0316f4961792d2d119d52d4faa0bb
+SHA256: 814ad971f848984d744a0aa6d6d7eb196c15edfe9f624e863d5fd619e96558d3
+SHA512: 19eae1e34dc26f8b9771c928305d2a9633c22c4568bf3bc46e687363383b5392f5be9d7a005748fa3ad4457a2be2732781fd2e2f7a652722a893b7b735a96d16
 Homepage: https://github.com/gmhoward9289-ops/legbar
 Description: one screen for the whole fleet: live agent sessions beside GitHub CI
  A full-screen curses view with both fleet lanes on one canvas: every live
