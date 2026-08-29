@@ -237,20 +237,31 @@ def transcript_index():
     Agent sidecars (agent-*.jsonl) are skipped: they are subagent traces, not
     sessions, and have no pid to join against.
     """
-    index = {}
+    best = {}
     if not PROJECTS_DIR.is_dir():
-        return index
+        return {}
     for path in PROJECTS_DIR.glob("*/*.jsonl"):
         if path.name.startswith("agent-"):
             continue
         sid = path.stem
-        prev = index.get(sid)
         try:
-            if prev is None or path.stat().st_mtime > prev.stat().st_mtime:
-                index[sid] = path
+            mtime = path.stat().st_mtime
         except OSError:
             continue
-    return index
+        prev = best.get(sid)
+        if prev is None or mtime > prev[0]:
+            best[sid] = (mtime, path)
+    return {sid: path for sid, (_, path) in best.items()}
+
+
+# Most sweeps find most transcripts untouched -- only the sessions actually
+# talking move their mtime between two 5-second ticks. Re-decoding and
+# re-parsing the same 256 KB tail for the idle ones is pure CPU spent inside
+# the GIL, which the curses paint thread shares; on a loaded box that is what
+# turned into visible input lag. Keyed on (mtime_ns, size): an append changes
+# both. Callers must not mutate the returned records.
+_TAIL_CACHE = {}
+_TAIL_CACHE_MAX = 128
 
 
 def read_tail(path):
@@ -260,7 +271,16 @@ def read_tail(path):
     seeking to a fixed offset lands mid-record, and a half line is not JSON.
     """
     try:
-        size = path.stat().st_size
+        st = path.stat()
+    except OSError:
+        return []
+    key = str(path)
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = _TAIL_CACHE.get(key)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    try:
+        size = st.st_size
         with path.open("rb") as fh:
             start = max(0, size - TAIL_BYTES)
             fh.seek(start)
@@ -279,6 +299,9 @@ def read_tail(path):
             records.append(json.loads(line))
         except ValueError:
             continue
+    if len(_TAIL_CACHE) >= _TAIL_CACHE_MAX:
+        _TAIL_CACHE.clear()
+    _TAIL_CACHE[key] = (stamp, records)
     return records
 
 
