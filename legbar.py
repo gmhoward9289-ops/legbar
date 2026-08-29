@@ -753,9 +753,13 @@ def commit_lines(state, width):
     now = time.time()
     for c in commits[:COMMIT_LIMIT]:
         age = henhouse.ago(now - c["ts"]) if c.get("ts") else "-"
+        subject = c.get("subject") or ""
+        if c.get("count", 1) > 1:
+            # A squashed streak of near-identical machine commits.
+            subject += "  x%d" % c["count"]
         line = "%-4s %-10s %s" % (
             age, clip(c.get("repo") or "-", 10),
-            clip(c.get("subject") or "", max(0, width - 16)))
+            clip(subject, max(0, width - 16)))
         out.append(clip(line, width))
     return out
 
