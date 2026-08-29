@@ -178,6 +178,23 @@ CONTEXT_WINDOWS = (
 )
 DEFAULT_WINDOW = 200_000
 
+# Models that bill against a paid cloud plan, by prefix. Anything else seen in
+# a transcript's usage records is a gateway/Ollama alias -- a session driven
+# through a local model server (LiteLLM, Ollama). Those sessions are real and
+# belong on the board, but they cost nothing against the paid caps, and their
+# context window is whatever num_ctx the alias pinned -- which no static table
+# here can know.
+CLOUD_PREFIXES = ("claude-", "composer-")
+
+# Gateway aliases often encode their pinned context in the name (gemma-32k,
+# qwen-coder-16k). When one does, that IS the denominator -- read from the
+# alias itself rather than guessed.
+_ALIAS_CTX = re.compile(r"-(\d+)k$")
+
+
+def is_local_model(model):
+    return bool(model) and not str(model).startswith(CLOUD_PREFIXES)
+
 # Tool names whose input carries a path the session wrote to. Reads are excluded
 # on purpose: opening a file says nothing about which project a session is on.
 WRITE_TOOLS = ("Write", "Edit", "NotebookEdit")
@@ -204,6 +221,13 @@ def context_window(model):
     for prefix, size in CONTEXT_WINDOWS:
         if model and model.startswith(prefix):
             return size
+    if is_local_model(model):
+        m = _ALIAS_CTX.search(str(model))
+        # No -Nk suffix means the pinned num_ctx is unknowable from here, so
+        # return None and let the bar go unlabelled -- a missing percentage
+        # beats a wrong denominator, which is the exact failure the sourced
+        # CONTEXT_WINDOWS table exists to prevent.
+        return int(m.group(1)) * 1024 if m else None
     return DEFAULT_WINDOW
 
 
@@ -577,7 +601,9 @@ def summarize(records, mtime, sid=None, now=None):
 
     pct = None
     if context_tokens:
-        pct = 100.0 * context_tokens / context_window(model)
+        window = context_window(model)
+        if window:
+            pct = 100.0 * context_tokens / window
 
     active_agents, recent_agents = count_subagents(sid, now)
 
@@ -592,6 +618,7 @@ def summarize(records, mtime, sid=None, now=None):
         "context_pct": pct,
         "context_tokens": context_tokens,
         "model": model,
+        "local": is_local_model(model),
         "burn_tokens": burn,
         "files_modified": files,
         # cost_usd stays unset on purpose. claudectl reported an API list-price
@@ -1275,6 +1302,7 @@ def build(telemetry, claims, occupancy, sessions, use_git=True):
             "task": (claim.get("task") or "").strip(),
             "status": t.get("status") or "-",
             "context_pct": t.get("context_pct"),
+            "local": bool(t.get("local")),
             "cost_usd": t.get("cost_usd"),
             "subagents": t.get("active_subagents") or 0,
             "subagents_recent": t.get("recent_subagents") or 0,

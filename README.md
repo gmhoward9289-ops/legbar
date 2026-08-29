@@ -45,6 +45,15 @@ Each session row leads with the tool that owns it — `cc-` for Claude Code,
 `cu-` for Cursor — then model, context bar, who is pending (`you` or `ai`) and
 for how long, subagent count, working-tree state, and what it is doing.
 
+Sessions driven through a local gateway (LiteLLM/Ollama aliases like
+`reef-coder` or `gemma-32k`) get roost's treatment: the task is prefixed
+`(local)`, the model code renders lowercase, and their token burn shows as its
+own `local` header figure instead of counting against `held` — local lanes
+cost nothing against a paid plan. Aliases that encode their pinned context in
+the name (`gemma-32k`) get that as the bar's denominator; for the rest the
+percentage is omitted rather than computed against a window the alias never
+had.
+
 ![legbar watching a fleet: two contested trees, sessions waiting on a human, and red CI that cannot scroll away](demo/legbar-demo.gif)
 
 The short ambient loop below is the same program, idling — which is how it
