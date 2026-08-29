@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -73,10 +74,20 @@ MODEL_SHORT = (
 def short_model(model):
     if not model:
         return "-"
+    model = str(model)
     for prefix, short in MODEL_SHORT:
-        if str(model).startswith(prefix):
+        if model.startswith(prefix):
             return short
-    return str(model)[:4]
+    if henhouse.is_local_model(model):
+        # Gateway/Ollama aliases: initials of the alias words, padded from the
+        # last word, so reef-coder (rcod), reef-coder-fast (rcfa) and
+        # gemma-32k (g32k) stay distinguishable in four chars. Lowercase on
+        # purpose -- the cloud tier codes above are uppercase, so case alone
+        # says which lane a row is on.
+        words = [w for w in re.split(r"[-_:./]+", model) if w]
+        code = "".join(w[0] for w in words) + words[-1][1:]
+        return code[:4].lower()
+    return model[:4]
 
 
 # A pane still on its first collect shows this instead of "no live sessions"
@@ -137,6 +148,7 @@ def collect_local(use_git=True):
         t = telemetry.get(r["pid"]) or {}
         r["source"] = "claude"
         r["model"] = t.get("model")
+        r["local"] = bool(t.get("local"))
         r["burn_tokens"] = t.get("burn_tokens")
         r["context_tokens"] = t.get("context_tokens")
         r["idle_secs"] = t.get("idle_secs")
@@ -178,6 +190,9 @@ def collect_local(use_git=True):
             "context_pct": c.get("ctx_pct"),
             "context_tokens": None,
             "model": c.get("model"),
+            # Cursor sessions are cloud by definition -- composer runs on
+            # Cursor's servers whatever the model name looks like.
+            "local": False,
             "burn_tokens": None,
             "subagents": 0,
             "contested": False,
@@ -477,7 +492,13 @@ def header(state, width):
                     if (r.get("status") or "") in henhouse.ATTENTION)
     red = sum(1 for e in state["ci"]
               if e.get("state") == "failed" or e.get("checks") == "red")
-    held = sum(r.get("burn_tokens") or 0 for r in state["sessions"])
+    # Local (gateway/Ollama) burn is real output but costs nothing against the
+    # paid caps -- same split roost draws in its budget math. It gets its own
+    # header bit below rather than inflating "held".
+    held = sum(r.get("burn_tokens") or 0 for r in state["sessions"]
+               if not r.get("local"))
+    local_burn = sum(r.get("burn_tokens") or 0 for r in state["sessions"]
+                     if r.get("local"))
 
     # Longest-waiting first: "3 need you (12m)" is a different call to action
     # from "3 need you (4s)", and the count alone cannot tell them apart.
@@ -505,6 +526,8 @@ def header(state, width):
         bits.append("%d ci red" % red)
     if held:
         bits.append("%s held" % human_tokens(held))
+    if local_burn:
+        bits.append("%s local" % human_tokens(local_burn))
     bits.append(time.strftime("%H:%M:%S"))
     return clip(" | ".join(bits), width)
 
@@ -586,7 +609,13 @@ def _session_row(r, width, show_git):
     pct_s = "%3d%%" % round(pct) if pct is not None else "   -"
     flag = "!" if r.get("contested") else " "
     fixed = _SESSION_FIXED_GIT if show_git else _SESSION_FIXED
-    task = clip(r.get("task") or r.get("project") or "", max(0, width - fixed))
+    task = r.get("task") or r.get("project") or ""
+    if r.get("local"):
+        # Roost's marker for gateway/Ollama-driven sessions, carried over so
+        # a lane that costs nothing against the paid caps never reads as one
+        # that does.
+        task = ("(local) " + task).rstrip()
+    task = clip(task, max(0, width - fixed))
     if show_git:
         line = "%s%-12s %-4s %s %s %-7s %s %s %s" % (
             flag, src_label(r),

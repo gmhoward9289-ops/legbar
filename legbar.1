@@ -31,6 +31,15 @@ Their liveness is inferred rather than probed \- Cursor writes no pid to join
 against, so a row means \fIthis transcript moved recently\fR, which is a weaker
 signal and is labelled as one.
 .PP
+Sessions driven through a local model gateway (LiteLLM/Ollama aliases such as
+\fIreef-coder\fR or \fIgemma-32k\fR) are labelled \fB(local)\fR, render a
+lowercase model code, and their burn is reported as a separate \fIlocal\fR
+header figure rather than counted in \fIheld\fR \- local lanes cost nothing
+against a paid plan. An alias that encodes its pinned context in its name
+(\fIgemma-32k\fR) gets that as the context-bar denominator; otherwise the
+percentage is omitted rather than computed against a window the alias never
+had.
+.PP
 Read-only by construction: legbar reads transcripts and registries and runs
 .BR gh
 and read-only git plumbing. It never writes to a tree, a registry or a

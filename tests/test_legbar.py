@@ -443,6 +443,60 @@ class CommitsPane(unittest.TestCase):
                 self.assertLessEqual(len(line), width, (width, line))
 
 
+class LocalLanes(unittest.TestCase):
+    """Gateway/Ollama-driven sessions: the roost treatment.
+
+    Sessions driven through a local gateway write the same transcripts as any
+    Claude Code session; what changes is the accounting -- no paid-cap cost,
+    and a context window pinned by the alias rather than the model family.
+    """
+
+    def test_gateway_aliases_are_local_and_cloud_tiers_are_not(self):
+        for m in ("reef-coder", "gemma-32k", "qwen2.5-coder:14b"):
+            self.assertTrue(henhouse.is_local_model(m), m)
+        for m in ("claude-opus-5", "claude-fable-5", "composer-1", None, ""):
+            self.assertFalse(henhouse.is_local_model(m), m)
+
+    def test_alias_context_comes_from_the_name_or_not_at_all(self):
+        # gemma-32k pins num_ctx 32768: the alias itself is the source.
+        self.assertEqual(henhouse.context_window("gemma-32k"), 32 * 1024)
+        self.assertEqual(henhouse.context_window("qwen-coder-16k"), 16 * 1024)
+        # No -Nk suffix -> None -> no percentage. An unlabelled bar beats a
+        # wrong denominator; DEFAULT_WINDOW is a claude fact, not an Ollama one.
+        self.assertIsNone(henhouse.context_window("reef-coder"))
+        self.assertEqual(henhouse.context_window("claude-opus-5"), 1_000_000)
+
+    def test_summarize_flags_local_and_skips_the_bad_denominator(self):
+        records = [{"type": "assistant", "message": {
+            "model": "reef-coder",
+            "usage": {"input_tokens": 5000, "output_tokens": 10}}}]
+        t = henhouse.summarize(records, mtime=time.time())
+        self.assertTrue(t["local"])
+        self.assertEqual(t["context_tokens"], 5000)
+        self.assertIsNone(t["context_pct"])
+
+    def test_local_aliases_get_readable_codes_in_lowercase(self):
+        # Lowercase is the lane marker: cloud tier codes are uppercase.
+        self.assertEqual(legbar.short_model("reef-coder"), "rcod")
+        self.assertEqual(legbar.short_model("reef-coder-fast"), "rcfa")
+        self.assertEqual(legbar.short_model("gemma-32k"), "g32k")
+
+    def test_local_rows_carry_the_roost_marker(self):
+        line = legbar._session_row(session(local=True, task="extract"),
+                                   200, False)
+        self.assertIn("(local) extract", line)
+        line = legbar._session_row(session(task="extract"), 200, False)
+        self.assertNotIn("(local)", line)
+
+    def test_local_burn_stays_out_of_held(self):
+        st = {"sessions": [session(burn_tokens=100_000),
+                           session(local=True, burn_tokens=50_000)],
+              "ci": [], "warn": "", "gh_warn": ""}
+        head = legbar.header(st, 200)
+        self.assertIn("100k held", head)
+        self.assertIn("50k local", head)
+
+
 class VersionStamp(unittest.TestCase):
     """roost's stamp semantics, ported: bottom-right, never the clipped row,
     dropped rather than wrapped."""
