@@ -4,6 +4,12 @@
 
 [![Discussions](https://img.shields.io/github/discussions/gmhoward9289-ops/legbar)](https://github.com/gmhoward9289-ops/legbar/discussions)
 
+```bash
+pipx install legbar && legbar
+```
+
+(`pip`, `brew`, `winget`, `npm`, and `apt` also work — see [Install](#install).)
+
 One screen for the whole fleet: **live agent sessions beside GitHub CI**, drawn
 from a single discovery layer so the two panes can never disagree.
 
