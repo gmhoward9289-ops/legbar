@@ -648,5 +648,61 @@ class SessionRowColour(unittest.TestCase):
             self.assertEqual(line.index("X"), fixed, (show_git, line))
 
 
+class WindowsCursesOffer(unittest.TestCase):
+    """offer_windows_curses(): the one prompt between "no curses" and "go
+    install it yourself". Everything here runs with mocks -- these tests
+    must pass on every platform, and must never actually run pip."""
+
+    def offer(self, tty=True, answer="y", rc=0, auto_install=True):
+        from unittest import mock
+        with mock.patch.object(legbar.sys.stdin, "isatty",
+                               return_value=tty), \
+             mock.patch("builtins.input", return_value=answer), \
+             mock.patch("subprocess.call", return_value=rc) as call:
+            got = legbar.offer_windows_curses(auto_install=auto_install)
+        return got, call
+
+    def test_a_yes_installs_against_this_interpreter(self):
+        got, call = self.offer(answer="y")
+        self.assertTrue(got)
+        call.assert_called_once_with(
+            [legbar.sys.executable, "-m", "pip", "install", "windows-curses"])
+
+    def test_a_decline_never_touches_pip(self):
+        for answer in ("n", "", "no", "quit"):
+            got, call = self.offer(answer=answer)
+            self.assertFalse(got, answer)
+            call.assert_not_called()
+
+    def test_no_terminal_on_stdin_means_no_prompt(self):
+        # Automation contexts must get the manual message, never a hang on
+        # input().
+        from unittest import mock
+        with mock.patch.object(legbar.sys.stdin, "isatty",
+                               return_value=False), \
+             mock.patch("builtins.input",
+                        side_effect=AssertionError("prompted")):
+            self.assertFalse(legbar.offer_windows_curses())
+
+    def test_the_flag_suppresses_the_offer(self):
+        got, call = self.offer(auto_install=False)
+        self.assertFalse(got)
+        call.assert_not_called()
+
+    def test_a_failed_pip_reports_and_declines(self):
+        got, call = self.offer(answer="y", rc=1)
+        self.assertFalse(got)
+        call.assert_called_once()
+
+    def test_eof_at_the_prompt_is_a_decline(self):
+        from unittest import mock
+        with mock.patch.object(legbar.sys.stdin, "isatty",
+                               return_value=True), \
+             mock.patch("builtins.input", side_effect=EOFError), \
+             mock.patch("subprocess.call",
+                        side_effect=AssertionError("installed")):
+            self.assertFalse(legbar.offer_windows_curses())
+
+
 if __name__ == "__main__":
     unittest.main()

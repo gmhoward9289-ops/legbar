@@ -1232,26 +1232,71 @@ class Model:
 # ---------------------------------------------------------------------------
 
 
+def offer_windows_curses(auto_install=True):
+    """One y/N prompt between "no curses" and "go install it yourself".
+
+    Returns True when windows-curses was just installed and the import is
+    worth retrying. Prompts only on a real interactive stdin (an automation
+    context that somehow reaches the TUI path should get the message, never
+    a hang on input()), installs with [sys.executable, -m, pip] so the
+    package lands in the exact interpreter this process runs under, and
+    never installs silently -- decline, EOF, or --no-auto-install all fall
+    through to the manual message.
+    """
+    if not (auto_install and sys.stdin.isatty()):
+        return False
+    try:
+        answer = input(
+            "legbar's full-screen view needs the windows-curses package.\n"
+            "install it now with pip? [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        return False
+    if answer.strip().lower() not in ("y", "yes"):
+        return False
+    import subprocess
+    rc = subprocess.call(
+        [sys.executable, "-m", "pip", "install", "windows-curses"])
+    if rc != 0:
+        sys.stderr.write("legbar: pip install windows-curses failed "
+                         "(exit %d)\n" % rc)
+        return False
+    return True
+
+
 def run_curses(args):
     # Deferred import, and deliberately so: --once and --json never need
     # curses, so a Windows Python without windows-curses still serves both.
     # Only the full-screen view pays, and it fails with the fix, not a
     # traceback. pip installs pull windows-curses automatically (see
-    # pyproject.toml); the npm shim cannot deliver a pip package, so this
-    # message is the npm-on-Windows path's one extra step.
+    # pyproject.toml); the npm shim cannot deliver a pip package, so on
+    # Windows we offer to run that pip install ourselves (one keypress)
+    # before falling back to the manual message.
     try:
         import curses
     except ImportError:
         if sys.platform == "win32":
-            sys.stderr.write(
-                "legbar's full-screen view needs the windows-curses package:\n"
-                "  \"%s\" -m pip install windows-curses\n"
-                "(--once and --json work without it)\n" % sys.executable)
+            if offer_windows_curses(auto_install=not args.no_auto_install):
+                try:
+                    import curses
+                except ImportError:
+                    # pip said success but the import still fails (mismatched
+                    # interpreter shims, broken wheel) -- fall through to the
+                    # manual message rather than looping on the prompt.
+                    curses = None
+            else:
+                curses = None
+            if curses is None:
+                sys.stderr.write(
+                    "legbar's full-screen view needs the windows-curses "
+                    "package:\n"
+                    "  \"%s\" -m pip install windows-curses\n"
+                    "(--once and --json work without it)\n" % sys.executable)
+                sys.exit(1)
         else:
             sys.stderr.write(
                 "legbar: this Python has no curses module; "
                 "--once and --json still work\n")
-        sys.exit(1)
+            sys.exit(1)
 
     def loop(scr):
         curses.curs_set(0)
@@ -1333,6 +1378,9 @@ def main(argv=None):
                     help="skip the gh sweep (offline, or when it is slow)")
     ap.add_argument("--no-color", action="store_true",
                     help="disable colour output in the full-screen view")
+    ap.add_argument("--no-auto-install", action="store_true",
+                    help="on Windows, never offer to pip-install "
+                         "windows-curses; just print the manual command")
     ap.add_argument("-i", "--interval", type=float, default=5.0,
                     help="seconds between refreshes in the full-screen view")
     ap.add_argument("--waiting-alert", type=float, default=20.0,
