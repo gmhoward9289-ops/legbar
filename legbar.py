@@ -67,6 +67,13 @@ MODEL_SHORT = (
     ("claude-sonnet-4", "SN4"),
     # Cursor's own family, seen in Task tool_use input.model.
     ("composer-", "CMP"),
+    # The lanes Cursor's model picker offers, read from composerData's
+    # modelConfig -- so a Grok worker reads GROK, not a hex id with "-".
+    ("grok", "GROK"),
+    ("gpt", "GPT"),
+    ("kimi", "KIMI"),
+    ("gemini", "GEM"),
+    ("default", "AUTO"),
 )
 
 
