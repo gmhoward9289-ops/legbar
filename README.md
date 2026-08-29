@@ -74,7 +74,11 @@ by pid against `~/.claude/sessions/<pid>.json`, with model, context burn, and
 status read from the session's own JSONL transcript. **Cursor agents appear
 too**, marked with a `cu-` name prefix — Cursor writes no session marker and no claim, so a fleet
 view that only reads Claude's session directory is blind to every Cursor agent
-running beside it.
+running beside it. Cursor rows are named by their composer title (falling back
+to the agent id when Cursor never titled one), and carry the model the
+composer actually selected — `grok-4.6` reads as `GROK`, not a dash — read
+from `modelConfig` in Cursor's own state DB rather than sniffed out of
+transcripts that almost never name one.
 
 **CI / PRS** — GitHub Actions runs and open pull requests across every clone,
 with failures pinned so a red build cannot scroll away.

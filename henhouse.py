@@ -1578,6 +1578,50 @@ def read_cursor_composer_headers(db_path=None):
     return headers
 
 
+def read_cursor_composer_models(ids, db_path=None):
+    """Selected model per composer id, from cursorDiskKV's composerData blobs.
+
+    ``modelConfig.modelName`` is the lane the composer actually runs --
+    grok-4.5, gpt-5, composer-2 -- and the only durable record of it: the
+    transcripts almost never name a model (see _cursor_scan_transcript).
+    Fetched only for the ids asked about, because the blobs are big and most
+    composers in the DB are long dead. Empty on any error, same contract as
+    read_cursor_composer_headers; "default" (Cursor's Auto lane) passes
+    through -- it is a real answer, not a missing one.
+    """
+    ids = [i for i in ids if i]
+    if not ids:
+        return {}
+    path = Path(db_path) if db_path else CURSOR_STATE_DB
+    if path is None or not path.is_file():
+        return {}
+    models = {}
+    try:
+        uri = "file:%s?mode=ro" % path.resolve().as_posix()
+        con = sqlite3.connect(uri, uri=True, timeout=0.5)
+        try:
+            keys = ["composerData:%s" % i for i in ids]
+            cur = con.execute(
+                "SELECT key, value FROM cursorDiskKV WHERE key IN (%s)"
+                % ",".join("?" * len(keys)), keys)
+            for key, val in cur:
+                try:
+                    d = json.loads(val) if val else {}
+                except ValueError:
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                mc = d.get("modelConfig")
+                name = mc.get("modelName") if isinstance(mc, dict) else None
+                if isinstance(name, str) and name.strip():
+                    models[key.split(":", 1)[1]] = name.strip()
+        finally:
+            con.close()
+    except (sqlite3.Error, OSError, ValueError):
+        return {}
+    return models
+
+
 def _cursor_scan_transcript(path):
     """Newest user_query and best-effort model from a Cursor transcript.
 
@@ -1681,7 +1725,10 @@ def load_cursor_sessions(now=None):
             rows.append({
                 "source": "cursor",
                 "pid": None,
-                "name": agent.name[:8],
+                # The composer's own title over the hex agent id: "GROKBOT
+                # smoke test" says which worker this is, "c5468eb1" does not.
+                # The id keeps living in sessionId for anything that joins.
+                "name": h.get("name") or agent.name[:8],
                 "sessionId": agent.name,
                 "cwd": cwd,
                 "idle_secs": int(idle),
@@ -1692,6 +1739,15 @@ def load_cursor_sessions(now=None):
                 "ctx_pct": h.get("ctx_pct"),
                 "model": model,
             })
+    # The composer's selected model beats the transcript sniff: composerData
+    # names the lane the parent itself runs, while the transcript usually only
+    # names a spawned subagent's model. "default" (Auto) is weaker -- it only
+    # fills rows the transcript left empty.
+    models = read_cursor_composer_models([r["sessionId"] for r in rows])
+    for r in rows:
+        m = models.get(r["sessionId"])
+        if m and (m != "default" or not r["model"]):
+            r["model"] = m
     rows.sort(key=lambda r: r["idle_secs"])
     return rows
 

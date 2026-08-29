@@ -17,10 +17,13 @@ from pathlib import Path
 import henhouse
 
 
-def _make_state_db(path, rows):
+def _make_state_db(path, rows, kv=None):
     """A minimal state.vscdb: just the composerHeaders columns henhouse reads.
 
-    ``rows`` are (composerId, isSubagent, isArchived, value-dict).
+    ``rows`` are (composerId, isSubagent, isArchived, value-dict). ``kv``,
+    when given, is {composerId: composerData-dict} and creates the
+    cursorDiskKV table too; without it the table is absent, like a Cursor
+    old enough not to write one.
     """
     con = sqlite3.connect(path)
     try:
@@ -32,6 +35,11 @@ def _make_state_db(path, rows):
             con.execute(
                 "INSERT INTO composerHeaders VALUES (?, ?, ?, ?, ?, ?)",
                 (cid, None, None, is_sub, is_arch, json.dumps(value)))
+        if kv is not None:
+            con.execute("CREATE TABLE cursorDiskKV (key TEXT, value TEXT)")
+            for cid, data in kv.items():
+                con.execute("INSERT INTO cursorDiskKV VALUES (?, ?)",
+                            ("composerData:%s" % cid, json.dumps(data)))
         con.commit()
     finally:
         con.close()
@@ -264,6 +272,79 @@ class HeaderEnrichedSessions(unittest.TestCase):
         _make_state_db(self.db, [("abc123", 0, 0, {"name": "x"})])
         row = henhouse.load_cursor_sessions()[0]
         self.assertEqual(row["model"], "composer-2.5")
+
+    def test_the_row_is_named_after_the_composer_not_the_hex_id(self):
+        self._agent("abc123", 10, [{"text": "no query here"}])
+        _make_state_db(self.db, [
+            ("abc123", 0, 0, {"name": "GROKBOT smoke test"})])
+        row = henhouse.load_cursor_sessions()[0]
+        self.assertEqual(row["name"], "GROKBOT smoke test")
+
+    def test_without_a_header_the_hex_id_still_names_the_row(self):
+        self._agent("abc12345678", 10, [{"text": "no query here"}])
+        _make_state_db(self.db, [])
+        row = henhouse.load_cursor_sessions()[0]
+        self.assertEqual(row["name"], "abc12345")
+
+    def test_the_composer_data_model_beats_the_transcript_sniff(self):
+        # The blob names the lane the parent runs; the transcript usually
+        # only names a spawned subagent's model.
+        self._agent("abc123", 10, [
+            {"role": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Task",
+                 "input": {"model": "composer-2.5"}}]}},
+        ])
+        _make_state_db(self.db, [("abc123", 0, 0, {"name": "x"})],
+                       kv={"abc123": {"modelConfig":
+                                      {"modelName": "grok-4.5"}}})
+        row = henhouse.load_cursor_sessions()[0]
+        self.assertEqual(row["model"], "grok-4.5")
+
+    def test_default_only_fills_a_row_the_transcript_left_empty(self):
+        self._agent("abc123", 10, [
+            {"role": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Task",
+                 "input": {"model": "composer-2.5"}}]}},
+        ])
+        self._agent("def456", 10, [{"text": "no query here"}])
+        _make_state_db(self.db,
+                       [("abc123", 0, 0, {"name": "x"}),
+                        ("def456", 0, 0, {"name": "y"})],
+                       kv={"abc123": {"modelConfig": {"modelName": "default"}},
+                           "def456": {"modelConfig": {"modelName": "default"}}})
+        rows = {r["sessionId"]: r for r in henhouse.load_cursor_sessions()}
+        self.assertEqual(rows["abc123"]["model"], "composer-2.5")
+        self.assertEqual(rows["def456"]["model"], "default")
+
+
+class ComposerModels(unittest.TestCase):
+    """read_cursor_composer_models: the composerData blob read on its own."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name) / "state.vscdb"
+
+    def test_models_are_read_for_the_ids_asked_about(self):
+        _make_state_db(self.db, [], kv={
+            "abc123": {"modelConfig": {"modelName": "grok-4.5"}},
+            "other0": {"modelConfig": {"modelName": "gpt-5"}},
+        })
+        got = henhouse.read_cursor_composer_models(["abc123"], self.db)
+        self.assertEqual(got, {"abc123": "grok-4.5"})
+
+    def test_a_db_without_the_kv_table_is_empty_not_an_error(self):
+        # Older Cursor: composerHeaders exists, cursorDiskKV does not.
+        _make_state_db(self.db, [("abc123", 0, 0, {"name": "x"})])
+        self.assertEqual(
+            henhouse.read_cursor_composer_models(["abc123"], self.db), {})
+
+    def test_a_missing_db_or_empty_ask_is_empty(self):
+        self.assertEqual(
+            henhouse.read_cursor_composer_models(["abc123"],
+                                                 self.db.parent / "nope"), {})
+        _make_state_db(self.db, [], kv={})
+        self.assertEqual(henhouse.read_cursor_composer_models([], self.db), {})
 
 
 if __name__ == "__main__":
