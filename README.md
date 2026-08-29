@@ -115,6 +115,12 @@ sudo apt update && sudo apt install legbar
 Windows without a package manager: grab the frozen `.exe` zip from the
 [latest release](https://github.com/gmhoward9289-ops/legbar/releases/latest).
 
+On Windows the full-screen view needs `windows-curses`. pip and pipx installs
+pull it in automatically; if you came in through npm (which can't deliver a
+pip package), the first full-screen run offers to install it for you — one
+`y` and you're in. `--no-auto-install` suppresses the offer, and `--once` /
+`--json` never need curses at all.
+
 ## Usage
 
 ```

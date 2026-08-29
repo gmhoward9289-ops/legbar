@@ -8,6 +8,7 @@ legbar \- one screen for the whole fleet: live agent sessions beside GitHub CI
 [\fB\-\-no\-git\fR]
 [\fB\-\-no\-ci\fR]
 [\fB\-\-no\-color\fR]
+[\fB\-\-no\-auto\-install\fR]
 [\fB\-i\fR \fISECS\fR]
 [\fB\-\-waiting\-alert\fR \fIMINUTES\fR]
 [\fB\-\-version\fR]
@@ -73,6 +74,15 @@ Skip the gh sweep entirely. Useful offline, or when the API is slow.
 .TP
 .B \-\-no\-color
 Disable colour in the full-screen view. \fBNO_COLOR\fR does the same.
+.TP
+.B \-\-no\-auto\-install
+Windows only. When the full-screen view finds no
+.B curses
+module, legbar normally offers (one interactive y/N prompt) to run
+\fBpip install windows-curses\fR against its own interpreter. This flag
+suppresses the offer and prints the manual command instead. The prompt never
+appears without a terminal on stdin, and \fB\-\-once\fR/\fB\-\-json\fR never
+need curses at all.
 .TP
 .BR \-i ", " \-\-interval " " \fISECS\fR
 Seconds between refreshes in the full-screen view (default 5).
