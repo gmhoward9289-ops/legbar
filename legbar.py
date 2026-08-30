@@ -539,25 +539,35 @@ def header(state, width):
                    for r in state["sessions"] if henhouse.uncommitted(r)}
     sub_n = sum(r.get("subagents") or 0 for r in state["sessions"])
 
-    bits = ["%s  %d session%s" % (NAME, n, "" if n == 1 else "s")]
-    if cursor_n:
-        bits.append("%d cursor" % cursor_n)
+    # Chips in shed order: trouble leftmost, bookkeeping rightmost, so the
+    # rightmost chip is the first to go as the window narrows. The clock is
+    # not a chip at all -- it is pinned after the survivors, because a wall
+    # display must always answer "when did this last update" (the charter's
+    # rule 3); clipping the whole joined line used to lose the clock first.
+    chips = ["%s  %d session%s" % (NAME, n, "" if n == 1 else "s")]
     if attention:
-        bits.append("%d need you (%s)" % (attention, henhouse.ago(waits[-1])))
+        chips.append("%d need you (%s)" % (attention, henhouse.ago(waits[-1])))
     if contested:
-        bits.append("%d contested" % contested)
-    if dirty_trees:
-        bits.append("%d uncommitted" % len(dirty_trees))
-    if sub_n:
-        bits.append("%d sub" % sub_n)
+        chips.append("%d contested" % contested)
     if red:
-        bits.append("%d ci red" % red)
+        chips.append("%d ci red" % red)
+    if dirty_trees:
+        chips.append("%d uncommitted" % len(dirty_trees))
+    if cursor_n:
+        chips.append("%d cursor" % cursor_n)
+    if sub_n:
+        chips.append("%d sub" % sub_n)
     if held:
-        bits.append("%s held" % human_tokens(held))
+        chips.append("%s held" % human_tokens(held))
     if local_burn:
-        bits.append("%s local" % human_tokens(local_burn))
-    bits.append(time.strftime("%H:%M:%S"))
-    return clip(" | ".join(bits), width)
+        chips.append("%s local" % human_tokens(local_burn))
+    clock = time.strftime("%H:%M:%S")
+    while chips:
+        line = " | ".join(chips + [clock])
+        if len(line) <= width:
+            return line
+        chips.pop()
+    return clip(clock, width)
 
 
 def human_tokens(n):
@@ -615,9 +625,48 @@ def bucket(r):
 
 
 # Fixed prefix before the free-text task (no status column -- the bucket label
-# and wait cell already say what status said). Keep in sync with _session_row.
+# and wait cell already say what status said) at full width; _row_cells()
+# computes the sheds below these. Keep in sync with _session_row.
 _SESSION_FIXED = 43
 _SESSION_FIXED_GIT = 53
+
+# The row's payload is the task text; every other cell yields to it. Below
+# this many spare columns the optional cells shed in a designed order --
+# context bar first (the pct number survives it), then the git cell, then
+# the sub count -- so the task still says something at 40 columns instead
+# of collapsing to zero behind the fixed cells.
+_MIN_TASK = 16
+
+
+def _row_cells(width, show_git):
+    """(show_bar, show_sub, show_git_cell) for a session row at this width.
+
+    Shared by _session_row() and _session_row_spans() so the text and the
+    colour layer can never disagree about which cells a row carries.
+    """
+    show_bar, show_sub, show_git_cell = True, show_git, show_git
+
+    def fixed():
+        n = 1 + 13 + 5          # flag + name + model
+        if show_bar:
+            n += 11             # context bar
+        n += 5 + 8              # pct + wait
+        if show_sub:
+            n += 3
+        if show_git_cell:
+            n += 7
+        return n
+
+    for shed in ("bar", "git", "sub"):
+        if width - fixed() >= _MIN_TASK:
+            break
+        if shed == "bar":
+            show_bar = False
+        elif shed == "git":
+            show_git_cell = False
+        else:
+            show_sub = False
+    return show_bar, show_sub, show_git_cell
 
 
 def src_label(r, width=12):
@@ -633,27 +682,28 @@ def src_label(r, width=12):
 
 
 def _session_row(r, width, show_git):
+    show_bar, show_sub, show_git_cell = _row_cells(width, show_git)
     pct = r.get("context_pct")
     pct_s = "%3d%%" % round(pct) if pct is not None else "   -"
     flag = "!" if r.get("contested") else " "
-    fixed = _SESSION_FIXED_GIT if show_git else _SESSION_FIXED
+    cells = ["%-12s" % src_label(r), "%-4s" % short_model(r.get("model"))]
+    if show_bar:
+        cells.append(bar(pct))
+    cells.append(pct_s)
+    cells.append("%-7s" % wait_cell(r))
+    if show_sub:
+        cells.append(sub_cell(r))
+    if show_git_cell:
+        cells.append(git_cell(r))
+    fixed = 1 + sum(len(c) + 1 for c in cells)
     task = r.get("task") or r.get("project") or ""
     if r.get("local"):
         # Roost's marker for gateway/Ollama-driven sessions, carried over so
         # a lane that costs nothing against the paid caps never reads as one
         # that does.
         task = ("(local) " + task).rstrip()
-    task = clip(task, max(0, width - fixed))
-    if show_git:
-        line = "%s%-12s %-4s %s %s %-7s %s %s %s" % (
-            flag, src_label(r),
-            short_model(r.get("model")), bar(pct), pct_s, wait_cell(r),
-            sub_cell(r), git_cell(r), task)
-    else:
-        line = "%s%-12s %-4s %s %s %-7s %s" % (
-            flag, src_label(r),
-            short_model(r.get("model")), bar(pct), pct_s, wait_cell(r), task)
-    return clip(line, width)
+    cells.append(clip(task, max(0, width - fixed)))
+    return clip(flag + " ".join(cells), width)
 
 
 def session_lines(state, width):
@@ -712,6 +762,9 @@ def _subagent_row(a, width):
     return clip(line, width)
 
 
+SUBAGENT_LIMIT = 12
+
+
 def subagent_lines(state, width):
     """Roost's SUBAGENTS panel -- the work a session farmed out."""
     agents = state.get("subagents") or []
@@ -722,8 +775,12 @@ def subagent_lines(state, width):
         else:
             out.append(clip("none running", width))
         return out
-    for a in agents[:12]:
+    for a in agents[:SUBAGENT_LIMIT]:
         out.append(_subagent_row(a, width))
+    if len(agents) > SUBAGENT_LIMIT:
+        # Never cut a list without saying so; the summary line below counts
+        # the whole fleet, this names how many rows the cut hid.
+        out.append(clip("... %d more" % (len(agents) - SUBAGENT_LIMIT), width))
     working = sum(1 for a in agents if a.get("state") == "working")
     out.append(clip("%d subagent(s), %d working" % (len(agents), working), width))
     return out
@@ -782,6 +839,10 @@ def commit_lines(state, width):
             age, clip(c.get("repo") or "-", 10),
             clip(subject, max(0, width - 16)))
         out.append(clip(line, width))
+    if len(commits) > COMMIT_LIMIT:
+        # Silent truncation is a lie -- the cut ends in a notice. There is no
+        # key that reaches the rest, so the notice only counts what it hid.
+        out.append(clip("... %d more" % (len(commits) - COMMIT_LIMIT), width))
     return out
 
 
@@ -825,6 +886,95 @@ def stamp_version(lines, width):
     if room >= 2:
         lines[-1] += " " * room + stamp
     return lines
+
+
+def help_lines(width):
+    """The `?` view: a glossary first, keys second.
+
+    The first question a viewer has is "what is this symbol telling me",
+    not "what does j do" -- so the sigils, the bar, the git cell and the
+    name prefixes come before the keybindings.
+    """
+    rows = [
+        "HELP",
+        "-" * 4,
+        "SYMBOLS",
+        "-" * 7,
+        "  !!         contested -- 2+ live sessions editing one working copy",
+        "   !         waiting on you past the alert age (--waiting-alert)",
+        "  cc- cu-    which tool a session is: Claude Code / Cursor",
+        "  [####--]   context used: # filled per 10%; yellow at 80, red at 100",
+        "  +1 ~3 ?2   git dirt: staged / unstaged / untracked file counts",
+        "  ^1 v2      git drift: commits ahead / behind upstream",
+        "  clean      tree settled; '-' means nothing was probed",
+        "  you 12m    that side of the conversation has waited that long",
+        "  (local)    gateway/Ollama session -- costs nothing vs paid caps",
+        "  ~          a value cut to fit; '... N more' is a list cut short",
+        "",
+        "KEYS",
+        "-" * 4,
+        "  q quit   g toggle git probing   r refresh now   ? this help",
+        "",
+        "any key to close",
+    ]
+    return [clip(l, width) for l in rows]
+
+
+def colorize_help(lines):
+    out = []
+    for line in lines:
+        stripped = line.rstrip()
+        if stripped in ("HELP", "SYMBOLS", "KEYS"):
+            out.append((line, [(0, len(stripped), C_CYAN, True)]))
+        elif stripped and set(stripped) == {"-"}:
+            out.append((line, [(0, len(stripped), C_CYAN, False)]))
+        else:
+            out.append((line, [(0, len(stripped), C_DIM, False)] if stripped
+                        else []))
+    return out
+
+
+# Footer tiers, under width pressure: the version stamp drops whole first,
+# then the secondary key hints, then the data ages. `q quit  ? help` survives
+# every tier -- quit and help have no other way to be discovered.
+FOOTER_CORE = "q quit  ? help"
+FOOTER_EXTRA = "  g git  r refresh"
+
+
+def footer_ages(local_ts, gh_ts, now=None):
+    """"updated 4s | gh 1m" -- when each half of the data last landed.
+
+    A wall display must always answer "when did this last update"; the two
+    halves refresh on different clocks (see GITHUB_INTERVAL), so each gets
+    its own age. Empty until the first collect lands.
+    """
+    now = time.time() if now is None else now
+    parts = []
+    if local_ts:
+        parts.append("updated %s" % henhouse.ago(now - local_ts))
+    if gh_ts:
+        parts.append("gh %s" % henhouse.ago(now - gh_ts))
+    return " | ".join(parts)
+
+
+def footer_line(width, ages=""):
+    """Key hints left, data ages right, version in the true corner."""
+    stamp = "v" + __version__
+    for hints, tail in (
+        (FOOTER_CORE + FOOTER_EXTRA, (ages, stamp)),
+        (FOOTER_CORE + FOOTER_EXTRA, (ages,)),
+        (FOOTER_CORE, (ages,)),
+        (FOOTER_CORE, ()),
+    ):
+        right = "  ".join(t for t in tail if t)
+        if not right:
+            if len(hints) <= width:
+                return hints
+            continue
+        room = width - len(hints) - len(right)
+        if room >= 2:
+            return hints + " " * room + right
+    return FOOTER_CORE[:width]
 
 
 def render(state, width):
@@ -888,6 +1038,11 @@ def init_colors(curses):
         bg = -1
     except curses.error:
         bg = curses.COLOR_BLACK
+    # Plain ANSI blue (4) is illegible on common dark palettes; the charter's
+    # identity role asks for xterm-256 bright blue (index 12) when the
+    # terminal has it, and always pairs blue with bold so 8-colour terminals
+    # brighten it instead.
+    blue = 12 if curses.COLORS >= 16 else curses.COLOR_BLUE
     for pair, fg in (
         (C_DIM, curses.COLOR_WHITE),
         (C_GREEN, curses.COLOR_GREEN),
@@ -895,7 +1050,7 @@ def init_colors(curses):
         (C_RED, curses.COLOR_RED),
         (C_CYAN, curses.COLOR_CYAN),
         (C_MAGENTA, curses.COLOR_MAGENTA),
-        (C_BLUE, curses.COLOR_BLUE),
+        (C_BLUE, blue),
     ):
         curses.init_pair(pair, fg, bg)
 
@@ -920,8 +1075,13 @@ def _bar_color(pct):
     return C_GREEN
 
 
-def _session_row_spans(line, show_git):
-    """Column offsets for a _session_row() line -- keep the two in sync."""
+def _session_row_spans(line, show_git, width):
+    """Column offsets for a _session_row() line -- keep the two in sync.
+
+    Offsets walk the same cell layout _row_cells() hands _session_row(), so
+    a shed cell moves every span after it in both layers at once.
+    """
+    show_bar, show_sub, show_git_cell = _row_cells(width, show_git)
     spans = []
     if line[:1] == "!":
         spans.append((0, 1, C_RED, True))
@@ -934,21 +1094,29 @@ def _session_row_spans(line, show_git):
     spans.append((1, 3, C_MAGENTA if line[1:4] == "cu-" else C_BLUE, True))
     spans.append((4, 9, C_CYAN, True))                        # name
     spans.append((14, 4, C_DIM, False))                       # model
-    bc = _bar_color(_bar_pct(line[30:34]))
-    spans.append((19, 10, bc, False))                         # context bar
-    spans.append((30, 4, bc, bc in (C_RED, C_YELLOW)))         # pct
-    wait = line[35:42].strip()
+    pos = 19
+    bar_at = None
+    if show_bar:
+        bar_at = pos
+        pos += 11
+    bc = _bar_color(_bar_pct(line[pos:pos + 4]))
+    if bar_at is not None:
+        spans.append((bar_at, 10, bc, False))                  # context bar
+    spans.append((pos, 4, bc, bc in (C_RED, C_YELLOW)))        # pct
+    pos += 5
+    wait = line[pos:pos + 7].strip()
     if wait and wait != "-":
-        spans.append((35, 7, C_YELLOW if wait.startswith("you") else C_GREEN,
+        spans.append((pos, 7, C_YELLOW if wait.startswith("you") else C_GREEN,
                       wait.startswith("you")))
-    if show_git:
-        git_txt = line[46:52].strip()
+    pos += 8
+    if show_sub:
+        pos += 3                                               # sub (dim base)
+    if show_git_cell:
+        git_txt = line[pos:pos + 6].strip()
         gc = C_DIM if git_txt in ("", "-", "clean") else C_YELLOW
-        spans.append((46, 6, gc, gc == C_YELLOW))
-        task_start = 53
-    else:
-        task_start = 43
-    spans.append((task_start, max(0, len(line) - task_start), C_DIM, False))
+        spans.append((pos, 6, gc, gc == C_YELLOW))
+        pos += 7
+    spans.append((pos, max(0, len(line) - pos), C_DIM, False))
     return spans
 
 
@@ -957,15 +1125,30 @@ def _ci_row_spans(line):
     color = {"> ": C_GREEN, ". ": C_YELLOW, "X ": C_RED, "! ": C_RED,
              "ok": C_GREEN}.get(glyph, C_DIM)
     return [(0, 2, color, color in (C_RED,)),
-            (3, 14, C_BLUE, False),
+            (3, 14, C_BLUE, True),  # identity role: repo names are bold blue
             (18, max(0, len(line) - 18), C_DIM, False)]
 
 
+# The charter's freshness threshold: a commit younger than this renders in
+# the ok role (green, bold); older ones settle into the dim base. Matches
+# leghorn's FRESH, replacing the old endswith("s") test which called a
+# 59-second commit fresh and a 61-second one stale.
+FRESH = 300
+
+
+def _age_secs(text):
+    """Parse an ago() age ("45s", "12m", "3h", "2d") back into seconds."""
+    m = re.match(r"^(\d+)([smhd])$", text)
+    if not m:
+        return None
+    return int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+
+
 def _commit_row_spans(line):
-    age = line[:4].strip()
-    fresh = age.endswith("s")  # henhouse.ago(): seconds-old is "just happened"
+    secs = _age_secs(line[:4].strip())
+    fresh = secs is not None and secs < FRESH
     return [(0, 4, C_GREEN if fresh else C_DIM, fresh),
-            (5, 10, C_BLUE, False),
+            (5, 10, C_BLUE, True),  # identity role: repo names are bold blue
             (16, max(0, len(line) - 16), C_DIM, False)]
 
 
@@ -999,6 +1182,10 @@ def colorize_block(lines, row_is, row_spans):
             out.append((line, [(0, len(stripped), C_YELLOW, False)]))
         elif stripped in _PLACEHOLDERS or stripped.endswith("collecting...") or not stripped:
             out.append((line, [(0, len(stripped), C_DIM, False)] if stripped else []))
+        elif stripped.startswith("..."):
+            # "... N more" truncation notices take the attention colour --
+            # a cut list dressed in the dim base would be a silent cut.
+            out.append((line, [(0, len(stripped), C_YELLOW, False)]))
         elif row_is(line):
             out.append((line, row_spans(line)))
         else:
@@ -1022,9 +1209,11 @@ def colorize_header(line):
             core = part[:part.index("(")].rstrip()
         if part.startswith(NAME):
             spans.append((pos, len(NAME), C_CYAN, True))
-        elif "need you" in part or "contested" in part:
+        elif "need you" in part or "contested" in part or "ci red" in part:
+            # ci red is the failure role -- red, like the runs it counts, not
+            # the attention yellow it used to borrow.
             spans.append((pos, len(core), C_RED, True))
-        elif "ci red" in part or "uncommitted" in part:
+        elif "uncommitted" in part:
             spans.append((pos, len(core), C_YELLOW, True))
         pos = end + 3  # " | "
     return spans
@@ -1043,6 +1232,11 @@ def colorize_band(lines):
             out.append((line, [(0, len(stripped), C_RED, True)]))
         elif line[:2] == " !":
             out.append((line, [(0, len(stripped), C_YELLOW, True)]))
+        elif stripped.lstrip().startswith("..."):
+            # The overflow notice: a hidden contested tree is the exact thing
+            # this band exists to stop happening, so the notice takes the
+            # attention colour, never the dim base.
+            out.append((line, [(0, len(stripped), C_YELLOW, False)]))
         elif stripped:
             out.append((line, [(0, len(stripped), C_DIM, False)]))
         else:
@@ -1055,7 +1249,7 @@ def colorize_sessions(state, width):
     return colorize_block(
         session_lines(state, width),
         row_is=lambda l: l[:1] in (" ", "!") and l[1:4] in ("cc-", "cu-"),
-        row_spans=lambda l: _session_row_spans(l, show_git))
+        row_spans=lambda l: _session_row_spans(l, show_git, width))
 
 
 def colorize_subagents(state, width):
@@ -1103,11 +1297,15 @@ def paint(scr, curses, state, width, h_avail, colors=True):
         if not colors:
             put(text, x0, 0)
             return
-        put(text, x0, curses.color_pair(C_DIM))
+        # C_DIM is white-on-default; without A_DIM "secondary" rendered at
+        # full brightness, so bold-is-live had nothing to stand out against.
+        put(text, x0, curses.color_pair(C_DIM) | curses.A_DIM)
         for start, length, pair, bold in spans:
             if length <= 0:
                 continue
             attr = curses.color_pair(pair) | (curses.A_BOLD if bold else 0)
+            if pair == C_DIM and not bold:
+                attr |= curses.A_DIM
             put(text[start:start + length], x0 + start, attr)
 
     def emit(rows, x0=0):
@@ -1149,6 +1347,30 @@ def paint(scr, curses, state, width, h_avail, colors=True):
         y += 1
 
 
+def paint_help(scr, curses, width, h_avail, colors=True):
+    """Draw the `?` overlay. Same span discipline as paint(), one column."""
+    y = 0
+    for text, spans in colorize_help(help_lines(width)):
+        if y >= h_avail:
+            break
+        base = (curses.color_pair(C_DIM) | curses.A_DIM) if colors else 0
+        try:
+            scr.addstr(y, 0, text[:width], base)
+            if colors:
+                for start, length, pair, bold in spans:
+                    if length <= 0:
+                        continue
+                    attr = curses.color_pair(pair) | (curses.A_BOLD if bold
+                                                      else 0)
+                    if pair == C_DIM and not bold:
+                        attr |= curses.A_DIM
+                    scr.addstr(y, start, text[start:start + length][:max(
+                        0, width - start)], attr)
+        except curses.error:
+            pass
+        y += 1
+
+
 # A gh sweep costs tens of seconds across a big fleet (see AGENTS.md), so it
 # refreshes far less often than the local, disk-and-git-only half of the state.
 GITHUB_INTERVAL = 60.0
@@ -1185,6 +1407,10 @@ class Model:
         self.ci, self.gh_warn = [], ""
         self.loading = True
         self.gh_loading = want_ci
+        # Wall-clock stamps of the last landed collect on each lane, feeding
+        # the footer's "updated Ns | gh Nm" ages. None until the first lands.
+        self.local_ts = None
+        self.gh_ts = None
         # Bumped on every collect (either lane). The paint loop compares it
         # against the last generation it drew, so a frame is only repainted
         # when there is something new to show -- see run_curses.
@@ -1272,6 +1498,7 @@ class Model:
             self.subagents = data["subagents"]
             self.warn = data["warn"]
             self.loading = False
+            self.local_ts = time.time()
             self.gen += 1
 
     def _collect_github(self):
@@ -1283,6 +1510,7 @@ class Model:
             self.ci = data["ci"]
             self.gh_warn = data["gh_warn"]
             self.gh_loading = False
+            self.gh_ts = time.time()
             self.gen += 1
 
     def snapshot(self):
@@ -1293,6 +1521,7 @@ class Model:
                 "ci": self.ci, "gh_warn": self.gh_warn,
                 "loading": self.loading, "gh_loading": self.gh_loading,
                 "use_git": self.use_git, "gen": self.gen,
+                "local_ts": self.local_ts, "gh_ts": self.gh_ts,
             }
 
 
@@ -1394,8 +1623,25 @@ def run_curses(args):
         spin = 0
         last_gen = -1
         last_clock = ""
+        help_on = False
         while True:
             ch = scr.getch()
+            if help_on:
+                # The overlay is static, so nothing repaints while it is up;
+                # any key closes it (including q -- first press dismisses,
+                # never quits) and forces the dashboard to redraw.
+                if ch == -1:
+                    continue
+                help_on = False
+                last_gen = -1
+                continue
+            if ch == ord("?"):
+                help_on = True
+                h, w = scr.getmaxyx()
+                scr.erase()
+                paint_help(scr, curses, w - 1, h - 1, colors=colors)
+                scr.refresh()
+                continue
             # Deliberately NOT ESC (27). Windows terminals emit escape
             # sequences at startup that PDCurses surfaces as a bare 27, so
             # quitting on it made legbar exit before its first paint -- it
@@ -1428,17 +1674,13 @@ def run_curses(args):
             scr.erase()
             paint(scr, curses, state, w - 1, h - 1, colors=colors)
             footer_attr = (curses.color_pair(C_DIM) | curses.A_DIM) if colors else 0
-            footer = "q quit  g git  r refresh"
-            stamp = "v" + __version__
+            # Key hints, data ages and the version stamp, composed by
+            # footer_line() so the degradation tiers live in one testable
+            # place. Ends at w-2 because addstr into the terminal's last
+            # cell raises on some curses builds.
+            ages = footer_ages(state.get("local_ts"), state.get("gh_ts"))
             try:
-                scr.addstr(h - 1, 0, footer[:w - 1], footer_attr)
-                # Version, bottom-right of the footer row, dim -- roost's
-                # stamp, on legbar's one row that exists in every frame.
-                # Dropped rather than clipped when the footer leaves fewer
-                # than two spare columns; ends at w-2 because addstr into
-                # the terminal's last cell raises on some curses builds.
-                if (w - 1) - len(footer) - len(stamp) >= 2:
-                    scr.addstr(h - 1, w - 1 - len(stamp), stamp, footer_attr)
+                scr.addstr(h - 1, 0, footer_line(w - 1, ages), footer_attr)
             except curses.error:
                 pass
             scr.refresh()

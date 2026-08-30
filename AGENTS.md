@@ -18,8 +18,8 @@ These mirror `.github/workflows/ci.yml`; run them from the repo root:
   `bash packaging/check-version-consistency.sh`.
 - Run (non-interactive): `python3 legbar.py --once`, `--json`, `--version`,
   `--help`. `henhouse.py` is also a standalone CLI: `python3 henhouse.py`.
-- Run (full-screen curses TUI): `python3 legbar.py`. Keys: `q` quit, `g` toggle
-  git probing, `r` refresh. It needs a real TTY, so it will not render under a
+- Run (full-screen curses TUI): `python3 legbar.py`. Keys: `q` quit, `?` help,
+  `g` toggle git probing, `r` refresh. It needs a real TTY, so it will not render under a
   plain piped stdout — use `--once` for non-interactive/CI contexts.
 
 ### Empty vs. populated fleet

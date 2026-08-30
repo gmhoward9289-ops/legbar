@@ -134,7 +134,8 @@ legbar --interval 2 # refresh every N seconds (default 5)
 legbar --waiting-alert 45   # only shout about waits older than 45 minutes
 ```
 
-In the full-screen view: `q` quit, `g` toggle git probing, `r` refresh now.
+In the full-screen view: `q` quit, `?` help (a glossary of the symbols,
+then the keys), `g` toggle git probing, `r` refresh now.
 Esc does not quit — on Windows PDCurses can deliver a false Esc.
 
 **NEEDS YOU** is deliberately hard to tune out. A session waiting on you is the

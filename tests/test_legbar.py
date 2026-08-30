@@ -629,9 +629,9 @@ class SessionRowColour(unittest.TestCase):
     wrong bytes rather than failing loudly.
     """
 
-    def row(self, show_git=False, **kw):
-        line = legbar._session_row(session(**kw), 200, show_git)
-        return line, legbar._session_row_spans(line, show_git)
+    def row(self, show_git=False, width=200, **kw):
+        line = legbar._session_row(session(**kw), width, show_git)
+        return line, legbar._session_row_spans(line, show_git, width)
 
     def span_at(self, spans, start):
         return next(s for s in spans if s[0] == start)
@@ -721,6 +721,309 @@ class WindowsCursesOffer(unittest.TestCase):
              mock.patch("subprocess.call",
                         side_effect=AssertionError("installed")):
             self.assertFalse(legbar.offer_windows_curses())
+
+
+class HeaderDegradation(unittest.TestCase):
+    """Chips shed right-to-left in a designed order; the clock is pinned.
+
+    The old header clipped the whole joined line, so the clock -- appended
+    last -- was the first thing a narrow window lost. A wall display must
+    always answer "when did this last update".
+    """
+
+    CLOCK = r"\d\d:\d\d:\d\d"
+
+    def state(self):
+        return {"sessions": [
+            session(status=henhouse.ATTENTION[0], idle_secs=740),
+            session(source="cursor"),
+            session(burn_tokens=125_000),
+            session(local=True, burn_tokens=50_000),
+        ], "ci": [{"kind": "run", "state": "failed", "repo": "r", "ts": 0}],
+            "warn": "", "gh_warn": ""}
+
+    def test_the_clock_survives_every_width(self):
+        import re
+        for width in (200, 80, 60, 40, 30, 20, 10):
+            head = legbar.header(self.state(), width)
+            self.assertLessEqual(len(head), width, (width, head))
+            self.assertRegex(head, self.CLOCK[:min(len(self.CLOCK),
+                                                   width * 4)] if width >= 8
+                             else r"\d", (width, head))
+
+    def test_bookkeeping_sheds_before_trouble(self):
+        # "local" and "held" are accounting; "need you" is a person blocked.
+        # Narrow the window until something has to go: the accounting chips
+        # go first, and "need you" is still standing when they are gone.
+        full = legbar.header(self.state(), 200)
+        self.assertIn("local", full)
+        for width in range(len(full) - 1, 30, -1):
+            head = legbar.header(self.state(), width)
+            if "local" not in head:
+                break
+        self.assertIn("need you", head)
+        self.assertIn("ci red", head)
+
+    def test_the_shed_order_is_right_to_left(self):
+        # Every narrower header is a prefix-chips subset of the wider one:
+        # chips only ever vanish from the right end.
+        prev_chips = None
+        for width in (200, 100, 80, 60, 45, 30):
+            head = legbar.header(self.state(), width)
+            chips = head.split(" | ")[:-1]  # drop the pinned clock
+            if prev_chips is not None:
+                self.assertEqual(chips, prev_chips[:len(chips)],
+                                 (width, head))
+            prev_chips = chips
+
+
+class HeaderColour(unittest.TestCase):
+    def test_ci_red_takes_the_failure_colour(self):
+        st = {"sessions": [], "warn": "", "gh_warn": "",
+              "ci": [{"kind": "run", "state": "failed", "repo": "r", "ts": 0}]}
+        head = legbar.header(st, 200)
+        pos = head.index("1 ci red")
+        spans = legbar.colorize_header(head)
+        span = next(s for s in spans if s[0] == pos)
+        self.assertEqual(span[2], legbar.C_RED)
+
+    def test_uncommitted_stays_attention_yellow(self):
+        st = {"sessions": [session(git={"staged": 1, "dirty": 0,
+                                        "untracked": 0, "ahead": 0,
+                                        "behind": 0}, worktree="/w/a")],
+              "ci": [], "warn": "", "gh_warn": ""}
+        head = legbar.header(st, 200)
+        pos = head.index("1 uncommitted")
+        span = next(s for s in legbar.colorize_header(head) if s[0] == pos)
+        self.assertEqual(span[2], legbar.C_YELLOW)
+
+
+class IdentityRole(unittest.TestCase):
+    """Repo names are the identity role: bright blue, always bold."""
+
+    def test_ci_repo_names_are_bold_blue(self):
+        span = next(s for s in legbar._ci_row_spans("X  legbar         run")
+                    if s[0] == 3)
+        self.assertEqual(span[2], legbar.C_BLUE)
+        self.assertTrue(span[3])
+
+    def test_commit_repo_names_are_bold_blue(self):
+        span = next(s for s in legbar._commit_row_spans(
+            "4m   legbar     subject") if s[0] == 5)
+        self.assertEqual(span[2], legbar.C_BLUE)
+        self.assertTrue(span[3])
+
+
+class CommitFreshness(unittest.TestCase):
+    """FRESH = 300s, like leghorn -- not "the age string ends in s"."""
+
+    def age_span(self, age):
+        line = "%-4s %-10s %s" % (age, "repo", "subject")
+        return legbar._commit_row_spans(line)[0]
+
+    def test_under_five_minutes_is_fresh(self):
+        for age in ("5s", "45s", "2m", "4m"):
+            span = self.age_span(age)
+            self.assertEqual(span[2], legbar.C_GREEN, age)
+            self.assertTrue(span[3], age)
+
+    def test_five_minutes_and_older_is_at_rest(self):
+        for age in ("5m", "12m", "3h", "2d"):
+            span = self.age_span(age)
+            self.assertEqual(span[2], legbar.C_DIM, age)
+            self.assertFalse(span[3], age)
+
+    def test_an_unparseable_age_is_at_rest(self):
+        self.assertEqual(self.age_span("-")[2], legbar.C_DIM)
+
+
+class TruncationNotices(unittest.TestCase):
+    """Any list cut short ends in an attention-coloured "... N more"."""
+
+    def commits(self, n):
+        return [{"repo": "r", "ts": time.time(), "sha": "a", "author": "g",
+                 "refs": "", "subject": "s%d" % i} for i in range(n)]
+
+    def agents(self, n):
+        return [{"state": "working", "agent_id": "a%d" % i, "parent": "p",
+                 "idle_secs": 1, "task": "t"} for i in range(n)]
+
+    def test_the_commit_pane_says_what_it_hid(self):
+        st = {"sessions": [], "ci": [], "warn": "", "gh_warn": "",
+              "use_git": True, "commits": self.commits(legbar.COMMIT_LIMIT + 3)}
+        lines = legbar.commit_lines(st, 100)
+        self.assertIn("... 3 more", lines[-1])
+
+    def test_an_exact_fit_needs_no_notice(self):
+        st = {"sessions": [], "ci": [], "warn": "", "gh_warn": "",
+              "use_git": True, "commits": self.commits(legbar.COMMIT_LIMIT)}
+        self.assertNotIn("more", "\n".join(legbar.commit_lines(st, 100)))
+
+    def test_the_subagent_pane_says_what_it_hid(self):
+        st = {"sessions": [], "ci": [], "warn": "", "gh_warn": "",
+              "use_git": True,
+              "subagents": self.agents(legbar.SUBAGENT_LIMIT + 5)}
+        text = "\n".join(legbar.subagent_lines(st, 100))
+        self.assertIn("... 5 more", text)
+
+    def test_the_notices_take_the_attention_colour(self):
+        st = {"sessions": [], "ci": [], "warn": "", "gh_warn": "",
+              "use_git": True, "commits": self.commits(legbar.COMMIT_LIMIT + 3),
+              "subagents": self.agents(legbar.SUBAGENT_LIMIT + 5)}
+        for rows in (legbar.colorize_commits(st, 100),
+                     legbar.colorize_subagents(st, 100)):
+            text, spans = next((t, s) for t, s in rows if "more" in t)
+            self.assertEqual(spans[0][2], legbar.C_YELLOW, text)
+
+    def test_the_band_overflow_line_is_yellow_not_dim(self):
+        st = {"sessions": [session(name="s%d" % i,
+                                   status=henhouse.ATTENTION[0], idle_secs=i)
+                           for i in range(legbar.ACTION_LIMIT + 4)],
+              "ci": [], "warn": "", "gh_warn": ""}
+        rows = legbar.colorize_band(legbar.action_lines(st, 200))
+        text, spans = next((t, s) for t, s in rows if "and 4 more" in t)
+        self.assertEqual(spans[0][2], legbar.C_YELLOW, text)
+
+
+class HelpView(unittest.TestCase):
+    """`?` help: a glossary first, keys second."""
+
+    def test_the_glossary_comes_before_the_keys(self):
+        text = "\n".join(legbar.help_lines(80))
+        self.assertLess(text.index("SYMBOLS"), text.index("KEYS"))
+
+    def test_it_explains_the_symbols_not_just_the_keys(self):
+        text = "\n".join(legbar.help_lines(80))
+        for sigil in ("!!", "cc- cu-", "+1 ~3 ?2", "^1 v2", "(local)"):
+            self.assertIn(sigil, text)
+
+    def test_it_lists_every_key(self):
+        text = "\n".join(legbar.help_lines(80))
+        for key in ("q quit", "g toggle", "r refresh", "? this help"):
+            self.assertIn(key, text)
+
+    def test_it_says_how_to_leave(self):
+        self.assertIn("any key to close", "\n".join(legbar.help_lines(80)))
+
+    def test_it_is_ascii_and_respects_the_width(self):
+        for width in (40, 80, 200):
+            for line in legbar.help_lines(width):
+                self.assertLessEqual(len(line), width, (width, line))
+                self.assertTrue(line.isascii(), line)
+
+    def test_titles_are_cyan_and_the_rest_is_dim(self):
+        rows = legbar.colorize_help(legbar.help_lines(80))
+        by_text = {t.rstrip(): s for t, s in rows}
+        self.assertEqual(by_text["SYMBOLS"][0][2], legbar.C_CYAN)
+        self.assertTrue(by_text["SYMBOLS"][0][3])
+        self.assertEqual(by_text["any key to close"][0][2], legbar.C_DIM)
+
+
+class FooterTiers(unittest.TestCase):
+    """q quit and ? help survive everything; ages outlast the version."""
+
+    AGES = "updated 4s | gh 1m"
+
+    def test_the_full_footer_carries_hints_ages_and_version(self):
+        line = legbar.footer_line(120, self.AGES)
+        for part in ("q quit", "? help", "g git", "r refresh",
+                     self.AGES, "v" + legbar.__version__):
+            self.assertIn(part, line)
+        self.assertLessEqual(len(line), 120)
+        self.assertTrue(line.endswith("v" + legbar.__version__))
+
+    def test_the_version_drops_whole_before_the_ages(self):
+        # One column narrower than the tightest full footer: something has
+        # to give, and the stamp goes first.
+        stamp = "v" + legbar.__version__
+        width = (len(legbar.FOOTER_CORE + legbar.FOOTER_EXTRA)
+                 + len(self.AGES) + 2 + len(stamp) + 2) - 1
+        line = legbar.footer_line(width, self.AGES)
+        self.assertNotIn("v" + legbar.__version__, line)
+        self.assertIn(self.AGES, line)
+
+    def test_the_ages_outlast_the_extra_key_hints(self):
+        width = len(legbar.FOOTER_CORE) + len(self.AGES) + 2
+        line = legbar.footer_line(width, self.AGES)
+        self.assertIn(self.AGES, line)
+        self.assertNotIn("r refresh", line)
+
+    def test_quit_and_help_survive_every_width(self):
+        for width in (200, 80, 40, 20, 14):
+            line = legbar.footer_line(width, self.AGES)
+            self.assertLessEqual(len(line), width)
+            if width >= len(legbar.FOOTER_CORE):
+                self.assertIn("q quit", line)
+                self.assertIn("? help", line)
+
+    def test_ages_name_both_clocks(self):
+        now = 1000.0
+        ages = legbar.footer_ages(now - 4, now - 70, now=now)
+        self.assertEqual(ages, "updated 4s | gh 1m")
+
+    def test_missing_clocks_leave_no_stub(self):
+        self.assertEqual(legbar.footer_ages(None, None, now=1000.0), "")
+        self.assertEqual(legbar.footer_ages(996.0, None, now=1000.0),
+                         "updated 4s")
+
+
+class NarrowSessionRows(unittest.TestCase):
+    """At 40 columns the task payload survives; the decoration sheds.
+
+    Shed order: the context bar first (the pct number stays), then the git
+    cell, then the sub count -- every cell yields to the payload.
+    """
+
+    def row(self, width, show_git=True):
+        r = session(task="fix the flaky test", context_pct=50, subagents=2,
+                    status="working", idle_secs=3,
+                    git={"staged": 0, "dirty": 2, "untracked": 0,
+                         "ahead": 1, "behind": 0})
+        return legbar._session_row(r, width, show_git)
+
+    def test_full_width_keeps_every_cell(self):
+        line = self.row(120)
+        self.assertIn("#####-----", line)
+        self.assertIn("~2^1", line)
+        self.assertIn("fix the flaky test", line)
+
+    def test_the_bar_sheds_first_but_the_pct_stays(self):
+        line = self.row(60)
+        self.assertNotIn("#####", line)
+        self.assertIn("50%", line)
+        self.assertIn("~2^1", line)  # git survives this tier
+        self.assertIn("fix the flaky", line)
+
+    def test_at_forty_columns_the_task_still_says_something(self):
+        line = self.row(40)
+        self.assertLessEqual(len(line), 40)
+        self.assertNotIn("#####", line)
+        self.assertNotIn("~2^1", line)
+        self.assertIn("50%", line)
+        self.assertIn("fix", line)
+
+    def test_the_spans_track_the_shed_layout(self):
+        # The colour layer walks the same _row_cells() layout, so the task
+        # span must start exactly where the task text does, at every tier.
+        for width in (40, 60, 120):
+            line = self.row(width)
+            spans = legbar._session_row_spans(line, True, width)
+            task_span = spans[-1]
+            self.assertEqual(line[task_span[0]:].lstrip()[:3], "fix",
+                             (width, line, task_span))
+
+    def test_render_at_forty_columns_keeps_the_payload(self):
+        st = {"sessions": [session(task="fix the flaky test", context_pct=50,
+                                   subagents=2, status="working", idle_secs=3,
+                                   git={"staged": 0, "dirty": 2,
+                                        "untracked": 0, "ahead": 1,
+                                        "behind": 0})],
+              "ci": [], "commits": [], "subagents": [], "warn": "",
+              "gh_warn": "", "use_git": True}
+        lines = legbar.render(st, 40)
+        for line in lines:
+            self.assertLessEqual(len(line), 40, line)
+        self.assertIn("fix", "\n".join(lines))
 
 
 if __name__ == "__main__":
