@@ -119,6 +119,25 @@ class WaitState(unittest.TestCase):
         self.assertEqual(len(widths), 1, widths)
 
 
+class StatusNormalization(unittest.TestCase):
+    """A spaced/title-cased status ("Needs Input") must read the same as the
+    canonical henhouse spelling ("needsinput") in every view. It used to
+    bucket the session into WAITING ON YOU while the NEEDS YOU band and the
+    header count silently omitted it.
+    """
+
+    def test_a_spaced_status_counts_everywhere(self):
+        row = session(name="stuck", status="Needs Input", idle_secs=125)
+        st = {"sessions": [row], "ci": [], "warn": "", "gh_warn": ""}
+
+        self.assertEqual(legbar.waiting_on(row)[0], "you")
+        self.assertEqual(legbar.session_sort(row)[0], 0)
+        self.assertEqual(legbar.bucket(row), legbar.BUCKET_WAITING)
+        self.assertIn("WAITING",
+                      [i["kind"] for i in legbar.actions(st)])
+        self.assertIn("1 need you", legbar.header(st, 200))
+
+
 class Actions(unittest.TestCase):
     """The NEEDS YOU band: what gets surfaced, and in what order."""
 

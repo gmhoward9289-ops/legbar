@@ -272,6 +272,15 @@ def collect(use_git=True, ci=True):
     return state
 
 
+def norm_status(r):
+    """A row's status folded to the henhouse.ATTENTION spelling: lowercase,
+    no spaces ("Needs Input" -> "needsinput"). Every comparison against the
+    constants goes through here -- a raw r["status"] check silently drops
+    spaced or title-cased statuses from one view while another catches them.
+    """
+    return (r.get("status") or "").lower().replace(" ", "")
+
+
 def waiting_on(r):
     """(who, seconds) -- which side of the conversation is pending, and for
     how long. ("", None) when nothing is outstanding.
@@ -281,7 +290,7 @@ def waiting_on(r):
     and on whom. `needsinput` means the model has answered and is waiting on a
     human; `working` means the human has asked and is waiting on the model.
     """
-    status = (r.get("status") or "").lower()
+    status = norm_status(r)
     secs = r.get("idle_secs")
     if status in henhouse.ATTENTION:
         return "you", secs
@@ -375,7 +384,7 @@ def session_sort(r):
     idle one -- the whole point of leaving this open is to be told when to
     look, not to admire a sorted list.
     """
-    status = r.get("status") or ""
+    status = norm_status(r)
     rank = 0 if status in henhouse.ATTENTION else (1 if status == "working" else 2)
     return (rank, -(r.get("context_pct") or 0), r.get("name") or "")
 
@@ -439,7 +448,7 @@ def actions(state):
         })
 
     waits = [(r.get("idle_secs") or 0, r) for r in state["sessions"]
-             if (r.get("status") or "") in henhouse.ATTENTION]
+             if norm_status(r) in henhouse.ATTENTION]
     for secs, r in sorted(waits, key=lambda pair: pair[0], reverse=True):
         # subject is a synthetic "<repo>-<pid suffix>" name -- it says which
         # checkout, not which conversation, and there is no reason to expect
@@ -508,7 +517,7 @@ def header(state, width):
     n = len(state["sessions"])
     cursor_n = sum(1 for r in state["sessions"] if r["source"] == "cursor")
     attention = sum(1 for r in state["sessions"]
-                    if (r.get("status") or "") in henhouse.ATTENTION)
+                    if norm_status(r) in henhouse.ATTENTION)
     red = sum(1 for e in state["ci"]
               if e.get("state") == "failed" or e.get("checks") == "red")
     # Local (gateway/Ollama) burn is real output but costs nothing against the
@@ -522,7 +531,7 @@ def header(state, width):
     # Longest-waiting first: "3 need you (12m)" is a different call to action
     # from "3 need you (4s)", and the count alone cannot tell them apart.
     waits = sorted((r.get("idle_secs") or 0) for r in state["sessions"]
-                   if (r.get("status") or "") in henhouse.ATTENTION)
+                   if norm_status(r) in henhouse.ATTENTION)
     contested = sum(1 for r in state["sessions"] if r.get("contested"))
     # Count trees, not sessions -- several sessions in one dirty tree is one
     # pile of uncommitted work.
@@ -585,7 +594,7 @@ BUCKET_QUIET = (5, "QUIET")
 
 def bucket(r):
     """Which roost-style group a session belongs in."""
-    status = (r.get("status") or "").lower()
+    status = norm_status(r)
     if status in henhouse.ATTENTION:
         return BUCKET_WAITING
     pct = r.get("context_pct")
