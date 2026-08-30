@@ -135,8 +135,15 @@ def clip(text, width):
 # ---------------------------------------------------------------------------
 
 
-def collect_local(use_git=True):
+def collect_local(use_git=True, commits=True):
     """Everything except the GitHub sweep: sessions, git, commits, subagents.
+
+    commits=False skips the commit feed and returns None for it, so a caller
+    holding an earlier feed can keep it. The feed is the one part of the local
+    sweep that costs a subprocess per repo (git log --all across the whole
+    root), and it changes on the clock of humans committing, not on the
+    5-second clock sessions move on -- see Model, which runs it on its own
+    slower cadence for exactly that reason.
 
     All local disk and git plumbing -- no network -- so this is the part
     that's fast enough to redraw on the same clock as the paint loop. Split
@@ -222,7 +229,12 @@ def collect_local(use_git=True):
 
     mark_contested(rows)
 
-    commits = henhouse.commit_feed(25) if use_git else []
+    if not use_git:
+        feed = []
+    elif commits:
+        feed = henhouse.commit_feed(25)
+    else:
+        feed = None
     claude_sids = [r.get("session_id") for r in rows if r.get("source") == "claude"]
     subagents = henhouse.list_subagents(claude_sids)
     # Attach parent display names so the pane can say who farmed the work out.
@@ -231,7 +243,7 @@ def collect_local(use_git=True):
         s["parent"] = by_sid.get(s.get("parent_sid")) or "-"
     return {
         "sessions": sorted(rows, key=session_sort),
-        "commits": commits,
+        "commits": feed,
         "subagents": subagents,
         "warn": warn,
         "use_git": use_git,
@@ -1131,6 +1143,11 @@ def paint(scr, curses, state, width, h_avail, colors=True):
 # A gh sweep costs tens of seconds across a big fleet (see AGENTS.md), so it
 # refreshes far less often than the local, disk-and-git-only half of the state.
 GITHUB_INTERVAL = 60.0
+# The commit feed spawns one `git log --all` per repo under the root -- the
+# most subprocess-heavy part of the local sweep -- and it only moves when a
+# human (or a session) commits. No reason to pay for it on the 5-second
+# session clock; 'r' still forces it immediately.
+COMMIT_INTERVAL = 30.0
 
 
 class Model:
@@ -1146,17 +1163,25 @@ class Model:
     slowest section.
     """
 
-    def __init__(self, interval, use_git, want_ci, github_interval=GITHUB_INTERVAL):
+    def __init__(self, interval, use_git, want_ci, github_interval=GITHUB_INTERVAL,
+                 commit_interval=COMMIT_INTERVAL):
         self.interval = interval
         self.use_git = use_git
         self.want_ci = want_ci
         self.github_interval = github_interval
+        self.commit_interval = commit_interval
         self.lock = threading.Lock()
         self.sessions, self.commits, self.subagents = [], [], []
         self.warn = ""
         self.ci, self.gh_warn = [], ""
         self.loading = True
         self.gh_loading = want_ci
+        # Bumped on every collect (either lane). The paint loop compares it
+        # against the last generation it drew, so a frame is only repainted
+        # when there is something new to show -- see run_curses.
+        self.gen = 0
+        self._last_commits = None  # None: no feed yet, so the first sweep owes one
+        self._force_commits = False
         self._wake = threading.Event()
         self._gh_wake = threading.Event()
         self._stop = threading.Event()
@@ -1171,9 +1196,15 @@ class Model:
     def toggle_git(self):
         with self.lock:
             self.use_git = not self.use_git
+            # Coming back from --no-git the feed on screen is the empty one
+            # the git-less sweep produced; owe a fresh one right away rather
+            # than leaving the pane blank until the commit clock next fires.
+            self._force_commits = True
         self._wake.set()  # git only affects the local half; don't re-sweep gh
 
     def refresh_now(self):
+        with self.lock:
+            self._force_commits = True  # 'r' means everything, commit feed too
         self._wake.set()
         self._gh_wake.set()
 
@@ -1182,33 +1213,57 @@ class Model:
         self._wake.set()
         self._gh_wake.set()
 
+    # A sweep's cost tracks system load: every git/gh call and transcript
+    # parse slows down exactly when the box is busy. Holding the nominal
+    # interval then makes legbar a load amplifier -- sweeping again the moment
+    # a slow sweep ends. Waiting out at least twice what the last sweep took
+    # keeps the duty cycle under ~33% however slow the box gets, and costs
+    # nothing when sweeps are fast (the nominal interval still wins).
+    @staticmethod
+    def _backoff(interval, took):
+        return max(interval, 2.0 * took)
+
     def _run_local(self):
         while not self._stop.is_set():
+            t0 = time.monotonic()
             self._collect_local()
-            self._wake.wait(self.interval)
+            self._wake.wait(self._backoff(self.interval,
+                                          time.monotonic() - t0))
             self._wake.clear()
 
     def _run_github(self):
         while not self._stop.is_set():
+            t0 = time.monotonic()
             self._collect_github()
-            self._gh_wake.wait(self.github_interval)
+            self._gh_wake.wait(self._backoff(self.github_interval,
+                                             time.monotonic() - t0))
             self._gh_wake.clear()
 
     def _collect_local(self):
         with self.lock:
             use_git = self.use_git
+            force = self._force_commits
+            self._force_commits = False
+        now = time.monotonic()
+        commits = (force or self._last_commits is None
+                   or now - self._last_commits >= self.commit_interval)
         try:
-            data = collect_local(use_git=use_git)
+            data = collect_local(use_git=use_git, commits=commits)
         except Exception:  # a dashboard that dies on one bad repo is useless
             with self.lock:
                 self.loading = False
+                self.gen += 1
             return
+        if commits:
+            self._last_commits = now
         with self.lock:
             self.sessions = data["sessions"]
-            self.commits = data["commits"]
+            if data["commits"] is not None:
+                self.commits = data["commits"]
             self.subagents = data["subagents"]
             self.warn = data["warn"]
             self.loading = False
+            self.gen += 1
 
     def _collect_github(self):
         try:
@@ -1219,6 +1274,7 @@ class Model:
             self.ci = data["ci"]
             self.gh_warn = data["gh_warn"]
             self.gh_loading = False
+            self.gen += 1
 
     def snapshot(self):
         with self.lock:
@@ -1227,7 +1283,7 @@ class Model:
                 "subagents": self.subagents, "warn": self.warn,
                 "ci": self.ci, "gh_warn": self.gh_warn,
                 "loading": self.loading, "gh_loading": self.gh_loading,
-                "use_git": self.use_git,
+                "use_git": self.use_git, "gen": self.gen,
             }
 
 
@@ -1304,7 +1360,12 @@ def run_curses(args):
 
     def loop(scr):
         curses.curs_set(0)
-        scr.nodelay(True)
+        # Block in getch for up to 100ms instead of nodelay + sleep: a key
+        # wakes the loop instantly (the old sleep put up to 100ms between the
+        # press and the handler, and under load the GIL stretched it further),
+        # and the waiting happens inside curses, off the GIL, so the collector
+        # threads sweep unimpeded.
+        scr.timeout(100)
         # NO_COLOR (https://no-color.org) is the community convention roost
         # already honours; has_colors() is false on a genuinely monochrome
         # terminal, where there is nothing to initialise either way.
@@ -1322,6 +1383,8 @@ def run_curses(args):
                      want_ci=not args.no_ci)
         model.start()
         spin = 0
+        last_gen = -1
+        last_clock = ""
         while True:
             ch = scr.getch()
             # Deliberately NOT ESC (27). Windows terminals emit escape
@@ -1337,6 +1400,18 @@ def run_curses(args):
                 model.refresh_now()
 
             state = model.snapshot()
+            # Repaint only when a frame would differ from the one on screen:
+            # a key or resize arrived (ch != -1), a collect landed (gen
+            # moved), a spinner is animating, or the header clock ticked over
+            # a second. The old loop erased and redrew the whole screen ten
+            # times a second regardless, which is exactly the CPU that went
+            # missing when the box was busy.
+            clock = time.strftime("%H:%M:%S")
+            if (ch == -1 and state["gen"] == last_gen and clock == last_clock
+                    and not state["loading"] and not state["gh_loading"]):
+                continue
+            last_gen = state["gen"]
+            last_clock = clock
             state["spin"] = spin
             spin += 1
 
@@ -1358,8 +1433,6 @@ def run_curses(args):
             except curses.error:
                 pass
             scr.refresh()
-
-            time.sleep(0.1)
 
     try:
         curses.wrapper(loop)
