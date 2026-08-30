@@ -1576,6 +1576,15 @@ def coalesce_resize(scr, curses_mod):
     stale-geometry frames still draining after the drag ended. The burst
     is drained here in one gulp and the caller paints once.
 
+    The drain is non-blocking (nodelay): it swallows only what is queued
+    right now and returns the instant the queue is empty -- it never
+    waits for the drag to go quiet. Mid-drag, each loop iteration
+    therefore still lands one full repaint at the latest geometry
+    (events arriving during that paint coalesce into the next one), so
+    the live cadence is max(event interval, paint cost), well under the
+    100ms getch timeout -- throttled live repaint, not
+    paint-only-after-silence.
+
     PDCurses (windows-curses) additionally keeps reporting the OLD
     getmaxyx() until resize_term(0, 0) resyncs its buffers: on a grown
     window every addstr past the stale bounds raises curses.error (which
