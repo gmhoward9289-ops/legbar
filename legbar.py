@@ -1561,6 +1561,54 @@ def offer_windows_curses(auto_install=True):
     return True
 
 
+# How long the paint loop blocks in getch() before waking to check the
+# spinner and the header clock. Shared with coalesce_resize(), which must
+# restore exactly this wait after draining a burst in nodelay mode.
+GETCH_TIMEOUT_MS = 100
+
+
+def coalesce_resize(scr, curses_mod):
+    """Swallow a resize burst and resync curses to the new geometry.
+
+    Windows Terminal (and most emulators) emit a stream of KEY_RESIZE
+    events while the window edge is dragged. Handling them one per loop
+    iteration queued one full erase+paint+refresh per event -- seconds of
+    stale-geometry frames still draining after the drag ended. The burst
+    is drained here in one gulp and the caller paints once.
+
+    PDCurses (windows-curses) additionally keeps reporting the OLD
+    getmaxyx() until resize_term(0, 0) resyncs its buffers: on a grown
+    window every addstr past the stale bounds raises curses.error (which
+    paint() swallows by design), so the new region stayed blank until
+    something else forced a frame. ncurses does the same resync inside
+    getch(), where resize_term(0, 0) is a harmless no-op.
+
+    Reads only the input queue -- never the collectors; resize costs one
+    relayout+repaint of already-collected state (see the test that pins
+    this). Returns the first non-resize key found while draining (-1 if
+    none) so a keypress hard on the heels of a drag is not lost, and
+    restores the loop's blocking getch before returning.
+    """
+    ch = -1
+    scr.nodelay(True)
+    try:
+        while True:
+            ch = scr.getch()
+            if ch != curses_mod.KEY_RESIZE:
+                break
+    finally:
+        # timeout() overrides nodelay(); this restores the loop's normal
+        # block-in-getch wait even if getch() itself raised.
+        scr.timeout(GETCH_TIMEOUT_MS)
+    resize = getattr(curses_mod, "resize_term", None)
+    if resize is not None:
+        try:
+            resize(0, 0)
+        except curses_mod.error:
+            pass
+    return ch
+
+
 def run_curses(args):
     # Deferred import, and deliberately so: --once and --json never need
     # curses, so a Windows Python without windows-curses still serves both.
@@ -1603,7 +1651,7 @@ def run_curses(args):
         # press and the handler, and under load the GIL stretched it further),
         # and the waiting happens inside curses, off the GIL, so the collector
         # threads sweep unimpeded.
-        scr.timeout(100)
+        scr.timeout(GETCH_TIMEOUT_MS)
         # NO_COLOR (https://no-color.org) is the community convention roost
         # already honours; has_colors() is false on a genuinely monochrome
         # terminal, where there is nothing to initialise either way.
@@ -1626,6 +1674,22 @@ def run_curses(args):
         help_on = False
         while True:
             ch = scr.getch()
+            if ch == curses.KEY_RESIZE:
+                # Drain the whole drag's worth of resize events, resync the
+                # curses geometry once, and force one repaint of the state
+                # already in hand -- collection stays on the Model threads'
+                # own clocks, untouched by resize.
+                ch = coalesce_resize(scr, curses)
+                last_gen = -1
+                if help_on:
+                    # The overlay skips the dashboard repaint below, so it
+                    # must relayout here or a resize leaves it stale/blank.
+                    h, w = scr.getmaxyx()
+                    scr.erase()
+                    paint_help(scr, curses, w - 1, h - 1, colors=colors)
+                    scr.refresh()
+                    if ch == -1:
+                        continue
             if help_on:
                 # The overlay is static, so nothing repaints while it is up;
                 # any key closes it (including q -- first press dismisses,

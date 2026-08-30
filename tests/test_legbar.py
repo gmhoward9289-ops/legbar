@@ -1026,5 +1026,110 @@ class NarrowSessionRows(unittest.TestCase):
         self.assertIn("fix", "\n".join(lines))
 
 
+class _FakeCurses:
+    """Just enough of the curses surface for coalesce_resize()."""
+    KEY_RESIZE = 410
+
+    class error(Exception):
+        pass
+
+    def __init__(self, resize_raises=False):
+        self.resize_calls = []
+        self._raises = resize_raises
+
+    def resize_term(self, y, x):
+        self.resize_calls.append((y, x))
+        if self._raises:
+            raise self.error("resize_term failed")
+
+
+class _FakeScr:
+    """A scripted input queue standing in for the curses window."""
+
+    def __init__(self, keys):
+        self.keys = list(keys)
+        self.nodelay_calls = []
+        self.timeout_calls = []
+
+    def getch(self):
+        return self.keys.pop(0) if self.keys else -1
+
+    def nodelay(self, flag):
+        self.nodelay_calls.append(flag)
+
+    def timeout(self, ms):
+        self.timeout_calls.append(ms)
+
+
+class ResizeCoalescing(unittest.TestCase):
+    """coalesce_resize(): a drag's burst becomes one relayout+repaint.
+
+    Windows Terminal emits a stream of KEY_RESIZE while the window edge is
+    dragged; painting one full frame per event queued seconds of
+    stale-geometry repaints behind the drag. The drain must also never
+    touch the collectors -- resize is relayout+repaint of cached state,
+    with collection staying on the Model threads' own clocks.
+    """
+
+    RS = _FakeCurses.KEY_RESIZE
+
+    def test_a_burst_drains_to_a_single_handling(self):
+        fc = _FakeCurses()
+        scr = _FakeScr([self.RS] * 12)
+        self.assertEqual(legbar.coalesce_resize(scr, fc), -1)
+        self.assertEqual(scr.keys, [])  # queue fully drained
+
+    def test_a_trailing_key_survives_the_drain(self):
+        # A keypress hard on the heels of a drag must not be swallowed.
+        fc = _FakeCurses()
+        scr = _FakeScr([self.RS, self.RS, ord("q")])
+        self.assertEqual(legbar.coalesce_resize(scr, fc), ord("q"))
+
+    def test_the_geometry_is_resynced_exactly_once(self):
+        # PDCurses keeps reporting the old getmaxyx() until resize_term(0,0);
+        # without it a grown window stays blank in the new region.
+        fc = _FakeCurses()
+        legbar.coalesce_resize(_FakeScr([self.RS] * 5), fc)
+        self.assertEqual(fc.resize_calls, [(0, 0)])
+
+    def test_a_failing_resize_term_is_not_fatal(self):
+        fc = _FakeCurses(resize_raises=True)
+        scr = _FakeScr([])
+        self.assertEqual(legbar.coalesce_resize(scr, fc), -1)
+
+    def test_a_curses_without_resize_term_is_tolerated(self):
+        # Some builds lack resize_term; the drain alone must still work.
+        class Bare:
+            KEY_RESIZE = self.RS
+
+            class error(Exception):
+                pass
+        self.assertEqual(legbar.coalesce_resize(_FakeScr([self.RS]), Bare), -1)
+
+    def test_the_blocking_getch_is_restored_after_the_drain(self):
+        # The drain flips to nodelay; the loop's 100ms block-in-getch (the
+        # PR #40 idle discipline) must come back afterwards.
+        scr = _FakeScr([self.RS, self.RS])
+        legbar.coalesce_resize(scr, _FakeCurses())
+        self.assertEqual(scr.nodelay_calls, [True])
+        self.assertEqual(scr.timeout_calls, [legbar.GETCH_TIMEOUT_MS])
+
+    def test_resize_never_calls_the_collectors(self):
+        # The whole point: resize costs relayout+repaint of cached state
+        # only. If someone later wires collection into the resize path,
+        # this is the tripwire.
+        from unittest import mock
+        with mock.patch.object(
+                legbar, "collect_local",
+                side_effect=AssertionError("resize hit collect_local")), \
+             mock.patch.object(
+                legbar, "collect_github",
+                side_effect=AssertionError("resize hit collect_github")), \
+             mock.patch.object(
+                henhouse, "commit_feed",
+                side_effect=AssertionError("resize hit commit_feed")):
+            legbar.coalesce_resize(_FakeScr([self.RS] * 8), _FakeCurses())
+
+
 if __name__ == "__main__":
     unittest.main()
