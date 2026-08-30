@@ -17,6 +17,14 @@ already says the API may move.
   becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
   the same build. `release.yml` checks the normalisation on every tag.
 
+## v0.3.7 - 2026-08-30
+
+### Added
+- Honest ages and streak squashing in the commit feed (#39).
+
+### Fixed
+- TUI no longer lags when the system is under load (#40).
+
 ## v0.3.6 - 2026-08-20
 
 ### Changed
