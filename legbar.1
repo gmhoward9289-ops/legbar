@@ -51,9 +51,12 @@ session. Every data source is optional and degrades to a labelled gap rather
 than an error \- an empty fleet renders an empty fleet, which is exactly the
 case someone is looking at when they are debugging why nothing is running.
 .PP
-The output is ASCII only, on purpose: block-drawing characters mojibake in the
-Windows console, so the context bars, pane rules and status glyphs are all
-plain ASCII.
+The output speaks one of two glyph dialects, chosen by the terminal at
+startup: an interactive UTF-8 stdout gets rounded pane frames and Unicode
+status glyphs; the legacy Windows console \- where block drawing mojibakes \-
+and every pipe-safe surface (\fB\-\-once\fR, \fB\-\-json\fR, a redirect) keep
+the byte-stable ASCII rendering. \fB\-\-ascii\fR or \fBLEGBAR_ASCII=1\fR
+forces the fallback. The context bar is ASCII in both dialects.
 .SH OPTIONS
 .TP
 .BR \-1 ", " \-\-once
@@ -74,6 +77,11 @@ Skip the gh sweep entirely. Useful offline, or when the API is slow.
 .TP
 .B \-\-no\-color
 Disable colour in the full-screen view. \fBNO_COLOR\fR does the same.
+.TP
+.B \-\-ascii
+Force the ASCII glyph dialect even on a UTF-8 terminal.
+\fBLEGBAR_ASCII=1\fR does the same. Pipes, \fB\-\-once\fR and \fB\-\-json\fR
+are always ASCII regardless.
 .TP
 .B \-\-no\-auto\-install
 Windows only. When the full-screen view finds no

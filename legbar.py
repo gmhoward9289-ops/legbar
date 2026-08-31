@@ -21,9 +21,15 @@ Two lanes, one canvas:
     legbar --json       # the joined state, for piping somewhere else
     legbar --no-git     # skip git probing if it is ever slow
 
-ASCII only, deliberately. Block-drawing characters mojibake in the Windows
-console, and this is a tool you leave open on a second monitor -- the same
-reasoning that keeps roost's sparklines and leghorn's tables ASCII.
+Two glyph dialects, one vocabulary -- chosen by the terminal, not the
+product (see the design charter). An interactive stdout that speaks UTF-8
+(Windows Terminal, any modern emulator) gets the Unicode tier: rounded pane
+frames and leghorn's glyph vocabulary. The legacy Windows console -- where
+block drawing mojibakes -- and every pipe-safe surface (--once, --json, a
+redirect) keep the ASCII rendering, byte for byte. The probe runs once at
+startup and holds for the session; LEGBAR_ASCII=1 or --ascii forces the
+fallback. The source file itself stays ASCII (the Unicode table ships as
+escapes) so it can never mojibake anywhere either.
 
 Read-only. It reads transcripts and registries, and runs `git` and `gh` in
 read-only modes. It never writes to a repo.
@@ -115,7 +121,9 @@ def spin_glyph(state):
 
 
 def loading_text(state):
-    return "%s collecting..." % spin_glyph(state)
+    # The trailing ellipsis follows the dialect -- a lone "..." inside a
+    # Unicode frame would be a mixed frame (see the charter).
+    return "%s collecting%s" % (spin_glyph(state), GLYPHS["more"])
 
 
 def clip(text, width):
@@ -127,7 +135,135 @@ def clip(text, width):
         return text
     if width <= 1:
         return text[:width]
-    return text[:width - 1] + "~"
+    return text[:width - 1] + GLYPHS["cut"]
+
+
+# ---------------------------------------------------------------------------
+# glyph dialects -- two tables, one vocabulary (the design charter's "chosen
+# by the terminal, not the product"). Which table renders is a runtime
+# capability decision made once at startup, the same way colour inherits the
+# terminal's theme: an interactive UTF-8 stdout gets the Unicode tier, the
+# legacy console and every pipe-safe surface (--once, --json, redirects) get
+# ASCII. A frame must never mix dialects, so every marker comes from GLYPHS
+# and colorize reads the same table back -- one lookup, selected once.
+#
+# The Unicode table is written as \u escapes on purpose: the source file
+# stays ASCII (CI asserts it), so the file itself is pipe-safe everywhere
+# even though the session it draws is not.
+# ---------------------------------------------------------------------------
+
+_ASCII_GLYPHS = {
+    "frames": False,
+    "contested": "!!",   # NEEDS YOU band marker for the destructive class
+    "attention": " !",   # NEEDS YOU band marker for an old unanswered wait
+    "flag": "!",         # per-session-row contested flag, column 0
+    "run": {"in_progress": ">", "queued": ".", "failed": "X",
+            "stuck": "!", "success": "ok"},
+    "checks": {"red": "X", "pending": ".", "green": "ok"},
+    "nodata": "-",       # CI glyph slot when the state is unknown
+    "ahead": "^",        # git drift: ^n commits ahead ...
+    "behind": "v",       # ... vn commits behind
+    "cut": "~",          # a cell clipped mid-value
+    "more": "...",       # a list cut short: "... N more"
+}
+
+_UNICODE_GLYPHS = {
+    "frames": True,
+    # U+25C9 fisheye -- the charter's contested glyph; the shape carries the
+    # meaning, colour is layered back on by colorize reading this marker.
+    "contested": "\u25c9 ",
+    # Attention keeps "!" in both dialects, deliberately: U+25CF (the live
+    # dot) already means running in the vocabulary, and overloading it for
+    # "waiting on you" would make the two highest-traffic signals share a
+    # shape. The help glossary documents the choice.
+    "attention": " !",
+    "flag": "\u25c9",
+    # live dot / open circle / ballot X / half-fill circle / check mark
+    "run": {"in_progress": "\u25cf", "queued": "\u25cb",
+            "failed": "\u2717", "stuck": "\u25cd", "success": "\u2713"},
+    "checks": {"red": "\u2717", "pending": "\u25cb", "green": "\u2713"},
+    "nodata": "\u00b7",  # middle dot -- the no-data fallback
+    "ahead": "\u2191",   # upwards arrow
+    "behind": "\u2193",  # downwards arrow
+    "cut": "\u2026",     # horizontal ellipsis
+    "more": "\u2026",
+    # Rounded light box drawing for the pane frames.
+    "tl": "\u256d", "tr": "\u256e", "bl": "\u2570", "br": "\u256f",
+    "h": "\u2500", "v": "\u2502",
+}
+
+GLYPHS = _ASCII_GLYPHS
+
+
+def set_dialect(unicode_ok):
+    """Select the session's glyph table -- called once, at startup.
+
+    Module state rather than a parameter threaded through every renderer,
+    same as WAITING_LOUD_SECS: display config, set before anything renders
+    and held for the whole session (the charter: probe once, never mid-run).
+    """
+    global GLYPHS
+    GLYPHS = _UNICODE_GLYPHS if unicode_ok else _ASCII_GLYPHS
+
+
+def unicode_capable(stdout=None, environ=None):
+    """The startup probe behind the two dialects.
+
+    An interactive stdout whose encoding is UTF-8 can display the Unicode
+    tier; anything else -- the legacy-codepage Windows console (cp437,
+    cp1252), a pipe, a redirect -- cannot be trusted with it and keeps
+    ASCII. LEGBAR_ASCII (any non-empty value) forces ASCII for users and
+    tests, the way NO_COLOR forces monochrome.
+    """
+    stdout = sys.stdout if stdout is None else stdout
+    environ = os.environ if environ is None else environ
+    if environ.get("LEGBAR_ASCII"):
+        return False
+    try:
+        if not stdout.isatty():
+            return False
+    except (AttributeError, ValueError):
+        return False
+    enc = getattr(stdout, "encoding", None) or ""
+    return enc.lower().replace("-", "").replace("_", "") == "utf8"
+
+
+def inner_width(width):
+    """Content width inside one section: a frame costs two columns a side."""
+    return width - 4 if GLYPHS["frames"] else width
+
+
+def frame_lines(title, body, width):
+    """Wrap body in a rounded chrome frame: `(tl)(h) TITLE (h...)(tr)`.
+
+    Unicode dialect only. The title sits inset two columns, uppercase,
+    padded -- leghorn's Pane.frame() in line form. Every line is exactly
+    `width` columns; the caller built body at inner_width(width), so
+    nothing is clipped here in the normal case.
+    """
+    G = GLYPHS
+    label = " %s " % title
+    if len(label) > width - 4:
+        label = label[:max(0, width - 4)]
+    top = G["tl"] + G["h"] + label + G["h"] * max(0, width - 3 - len(label)) + G["tr"]
+    inner = max(0, width - 4)
+    out = [top]
+    for line in body:
+        out.append(G["v"] + " " + line[:inner].ljust(inner) + " " + G["v"])
+    out.append(G["bl"] + G["h"] * max(0, width - 2) + G["br"])
+    return out
+
+
+def section(title, body, width):
+    """One block's chrome in the active dialect.
+
+    ASCII: the historical bold-title-plus-dash-rule (byte-identical to what
+    it always printed). Unicode: a rounded frame with the title in the top
+    border, replacing the title and rule entirely.
+    """
+    if GLYPHS["frames"]:
+        return frame_lines(title, body, width)
+    return [title, "-" * min(width, len(title))] + body
 
 
 # ---------------------------------------------------------------------------
@@ -335,8 +471,8 @@ def git_cell(r, width=6):
     if ahead is None:
         drift = ""
     else:
-        drift = (("^%d" % ahead if ahead else "")
-                 + ("v%d" % behind if behind else ""))
+        drift = (("%s%d" % (GLYPHS["ahead"], ahead) if ahead else "")
+                 + ("%s%d" % (GLYPHS["behind"], behind) if behind else ""))
         if not drift:
             drift = "" if parts else ""
     text = dirt + drift
@@ -486,31 +622,32 @@ def action_lines(state, width):
     items = actions(state)
     if not items:
         return []
-    out = ["NEEDS YOU", "-" * min(width, 9)]
+    bw = inner_width(width)
+    body = []
     for it in items[:ACTION_LIMIT]:
-        # Two markers for the destructive class, one for the merely blocked,
-        # none for a row that is only informational -- legible without colour,
-        # which a terminal may not have. colorize_band() reads exactly this
-        # marker, so the sigil and the colour cannot drift apart.
+        # A loud marker for the destructive class, a quieter one for the
+        # merely blocked, none for a row that is only informational --
+        # legible without colour, which a terminal may not have.
+        # colorize_band() reads exactly this marker back from GLYPHS, so
+        # the sigil and the colour cannot drift apart.
         if it["rank"] == 0:
-            mark = "!!"
+            mark = GLYPHS["contested"]
         elif it["rank"] == 1 and it.get("loud", True):
-            mark = " !"
+            mark = GLYPHS["attention"]
         else:
             mark = "  "
-        out.append(clip("%s %-10s %-16s %s"
-                        % (mark, it["kind"], clip(it["subject"], 16),
-                           it["detail"]), width))
+        body.append(clip("%s %-10s %-16s %s"
+                         % (mark, it["kind"], clip(it["subject"], 16),
+                            it["detail"]), bw))
     if len(items) > ACTION_LIMIT:
         # Never truncate silently: a hidden contested tree is the exact thing
         # this section exists to stop happening.
-        out.append(clip("   ... and %d more (%d contested, %d waiting, %d ci)"
-                        % (len(items) - ACTION_LIMIT,
-                           sum(1 for i in items if i["rank"] == 0),
-                           sum(1 for i in items if i["rank"] == 1),
-                           sum(1 for i in items if i["rank"] == 2)), width))
-    out.append("")
-    return out
+        body.append(clip("   %s and %d more (%d contested, %d waiting, %d ci)"
+                         % (GLYPHS["more"], len(items) - ACTION_LIMIT,
+                            sum(1 for i in items if i["rank"] == 0),
+                            sum(1 for i in items if i["rank"] == 1),
+                            sum(1 for i in items if i["rank"] == 2)), bw))
+    return section("NEEDS YOU", body, width) + [""]
 
 
 def header(state, width):
@@ -685,7 +822,7 @@ def _session_row(r, width, show_git):
     show_bar, show_sub, show_git_cell = _row_cells(width, show_git)
     pct = r.get("context_pct")
     pct_s = "%3d%%" % round(pct) if pct is not None else "   -"
-    flag = "!" if r.get("contested") else " "
+    flag = GLYPHS["flag"] if r.get("contested") else " "
     cells = ["%-12s" % src_label(r), "%-4s" % short_model(r.get("model"))]
     if show_bar:
         cells.append(bar(pct))
@@ -710,12 +847,12 @@ def session_lines(state, width):
     """Roost-style buckets on the left: attention groups, QUIET collapsed."""
     out = []
     rows = state.get("sessions") or []
+    bw = inner_width(width)
+    framed = GLYPHS["frames"]
     if not rows:
-        out.append(clip("SESSIONS", width))
-        out.append("-" * min(width, 8))
-        out.append(clip(loading_text(state) if state.get("loading")
-                        else "no live sessions", width))
-        return out
+        return section("SESSIONS", [clip(loading_text(state)
+                                         if state.get("loading")
+                                         else "no live sessions", bw)], width)
     show_git = bool(state.get("use_git", True))
     grouped = {}
     for r in rows:
@@ -729,19 +866,27 @@ def session_lines(state, width):
             # One collapsed line -- roost's QUIET, so idle noise cannot bury
             # the actionable board above it.
             names = ", ".join(clip(r.get("name") or "-", 12) for r in members)
-            out.append(clip("QUIET (%d)  %s" % (len(members), names), width))
+            out.append(clip("QUIET (%d)  %s" % (len(members), names), bw))
             continue
-        out.append(clip(label, width))
-        out.append("-" * min(width, len(label)))
+        out.append(clip(label, bw))
+        if not framed:
+            # The bucket label's dash rule -- inside a frame the label alone
+            # separates groups, and a rule would be ASCII chrome in a
+            # Unicode frame.
+            out.append("-" * min(bw, len(label)))
         for r in members:
-            out.append(_session_row(r, width, show_git))
+            out.append(_session_row(r, bw, show_git))
         out.append("")
 
     if state.get("warn"):
-        out.append(clip("note: %s" % state["warn"], width))
+        out.append(clip("note: %s" % state["warn"], bw))
     # Drop a trailing blank from the last bucket.
     while out and out[-1] == "":
         out.pop()
+    if framed:
+        # One frame around the whole lane: the bucket labels stay interior
+        # headings, the way leghorn's SESSIONS pane titles its one box.
+        return frame_lines("SESSIONS", out, width)
     return out
 
 
@@ -768,51 +913,51 @@ SUBAGENT_LIMIT = 12
 def subagent_lines(state, width):
     """Roost's SUBAGENTS panel -- the work a session farmed out."""
     agents = state.get("subagents") or []
-    out = ["SUBAGENTS", "-" * min(width, 9)]
+    bw = inner_width(width)
     if not agents:
-        if state.get("loading"):
-            out.append(clip(loading_text(state), width))
-        else:
-            out.append(clip("none running", width))
-        return out
+        placeholder = (loading_text(state) if state.get("loading")
+                       else "none running")
+        return section("SUBAGENTS", [clip(placeholder, bw)], width)
+    body = []
     for a in agents[:SUBAGENT_LIMIT]:
-        out.append(_subagent_row(a, width))
+        body.append(_subagent_row(a, bw))
     if len(agents) > SUBAGENT_LIMIT:
         # Never cut a list without saying so; the summary line below counts
         # the whole fleet, this names how many rows the cut hid.
-        out.append(clip("... %d more" % (len(agents) - SUBAGENT_LIMIT), width))
+        body.append(clip("%s %d more" % (GLYPHS["more"],
+                                         len(agents) - SUBAGENT_LIMIT), bw))
     working = sum(1 for a in agents if a.get("state") == "working")
-    out.append(clip("%d subagent(s), %d working" % (len(agents), working), width))
-    return out
+    body.append(clip("%d subagent(s), %d working" % (len(agents), working), bw))
+    return section("SUBAGENTS", body, width)
 
 
 def ci_lines(state, width):
-    out = ["GITHUB", "-" * min(width, 6)]
+    bw = inner_width(width)
     if state.get("gh_warn"):
-        out.append(clip("gh unavailable: %s" % state["gh_warn"], width))
-        return out
+        return section("GITHUB",
+                       [clip("gh unavailable: %s" % state["gh_warn"], bw)],
+                       width)
     if not state["ci"]:
         # The GitHub sweep runs on its own, slower clock than the rest of the
         # state (see run_curses.Model) -- gh_loading tracks its own first
         # sweep. States that never set it (--once/--json/tests) fall back to
         # the shared "loading" flag, which is what they do set.
         still_loading = state.get("gh_loading", state.get("loading"))
-        out.append(clip(loading_text(state) if still_loading
-                        else "nothing running, nothing red", width))
-        return out
+        return section("GITHUB",
+                       [clip(loading_text(state) if still_loading
+                             else "nothing running, nothing red", bw)], width)
+    body = []
     for e in state["ci"]:
         if e.get("kind") == "run":
-            glyph = {"in_progress": ">", "queued": ".", "failed": "X",
-                     "stuck": "!", "success": "ok"}.get(e.get("state"), "-")
+            glyph = GLYPHS["run"].get(e.get("state"), GLYPHS["nodata"])
             label = e.get("name") or e.get("workflow") or "run"
         else:
-            glyph = {"red": "X", "pending": ".", "green": "ok"}.get(
-                e.get("checks"), "-")
+            glyph = GLYPHS["checks"].get(e.get("checks"), GLYPHS["nodata"])
             label = "#%s %s" % (e.get("number", "?"), e.get("title") or "pr")
         line = "%-2s %-14s %s" % (glyph, clip(e.get("repo") or "-", 14),
-                                  clip(label, max(0, width - 20)))
-        out.append(clip(line, width))
-    return out
+                                  clip(label, max(0, bw - 20)))
+        body.append(clip(line, bw))
+    return section("GITHUB", body, width)
 
 
 COMMIT_LIMIT = 12
@@ -820,14 +965,13 @@ COMMIT_LIMIT = 12
 
 def commit_lines(state, width):
     """Leghorn's third pane: what landed, newest first."""
-    out = ["COMMITS", "-" * min(width, 7)]
+    bw = inner_width(width)
     commits = state.get("commits") or []
     if state.get("loading") and not commits:
-        out.append(clip(loading_text(state), width))
-        return out
+        return section("COMMITS", [clip(loading_text(state), bw)], width)
     if not commits:
-        out.append(clip("no commits", width))
-        return out
+        return section("COMMITS", [clip("no commits", bw)], width)
+    body = []
     now = time.time()
     for c in commits[:COMMIT_LIMIT]:
         age = henhouse.ago(now - c["ts"]) if c.get("ts") else "-"
@@ -837,13 +981,14 @@ def commit_lines(state, width):
             subject += "  x%d" % c["count"]
         line = "%-4s %-10s %s" % (
             age, clip(c.get("repo") or "-", 10),
-            clip(subject, max(0, width - 16)))
-        out.append(clip(line, width))
+            clip(subject, max(0, bw - 16)))
+        body.append(clip(line, bw))
     if len(commits) > COMMIT_LIMIT:
         # Silent truncation is a lie -- the cut ends in a notice. There is no
         # key that reaches the rest, so the notice only counts what it hid.
-        out.append(clip("... %d more" % (len(commits) - COMMIT_LIMIT), width))
-    return out
+        body.append(clip("%s %d more" % (GLYPHS["more"],
+                                         len(commits) - COMMIT_LIMIT), bw))
+    return section("COMMITS", body, width)
 
 
 def _stack_right(ci, commits):
@@ -895,21 +1040,39 @@ def help_lines(width):
     not "what does j do" -- so the sigils, the bar, the git cell and the
     name prefixes come before the keybindings.
     """
+    G = GLYPHS
+    # The glossary shows the active dialect's glyphs -- explaining "!!" to
+    # someone whose screen draws the fisheye would be a glossary for a
+    # different product. Attention keeps "!" in both dialects (see the
+    # dialect tables: the live dot already means running), so that row is
+    # shared.
+    contested = "!!" if not G["frames"] else G["flag"] + " "
+    run, chk = G["run"], G["checks"]
+    ci_sigils = "%s %s %s %s %s" % (run["in_progress"], run["queued"],
+                                    run["failed"], run["stuck"],
+                                    run["success"])
     rows = [
         "HELP",
         "-" * 4,
         "SYMBOLS",
         "-" * 7,
-        "  !!         contested -- 2+ live sessions editing one working copy",
+        "  %-9s  contested -- 2+ live sessions editing one working copy"
+        % contested,
         "   !         waiting on you past the alert age (--waiting-alert)",
         "  cc- cu-    which tool a session is: Claude Code / Cursor",
         "  [####--]   context used: # filled per 10%; yellow at 80, red at 100",
         "  +1 ~3 ?2   git dirt: staged / unstaged / untracked file counts",
-        "  ^1 v2      git drift: commits ahead / behind upstream",
+        "  %s1 %s2      git drift: commits ahead / behind upstream"
+        % (G["ahead"], G["behind"]),
+        "  %-9s  ci: running / queued / failed / stuck / passed"
+        % ci_sigils,
+        "  %-9s  pr checks: red / pending / green"
+        % ("%s %s %s" % (chk["red"], chk["pending"], chk["green"])),
         "  clean      tree settled; '-' means nothing was probed",
         "  you 12m    that side of the conversation has waited that long",
         "  (local)    gateway/Ollama session -- costs nothing vs paid caps",
-        "  ~          a value cut to fit; '... N more' is a list cut short",
+        "  %-9s  a value cut to fit; '%s N more' is a list cut short"
+        % (G["cut"], G["more"]),
         "",
         "KEYS",
         "-" * 4,
@@ -1083,7 +1246,7 @@ def _session_row_spans(line, show_git, width):
     """
     show_bar, show_sub, show_git_cell = _row_cells(width, show_git)
     spans = []
-    if line[:1] == "!":
+    if line[:1] == GLYPHS["flag"]:
         spans.append((0, 1, C_RED, True))
     # The name column is "cc-"/"cu-" + name. The prefix is colour-coded by
     # tool so a fleet reads as two populations at a glance, without anyone
@@ -1120,10 +1283,25 @@ def _session_row_spans(line, show_git, width):
     return spans
 
 
+def _ci_glyph_color(glyph):
+    """CI glyph -> colour, from the active dialect's table -- emit and
+    colorize share one vocabulary, so a dialect swap cannot split them."""
+    run, chk = GLYPHS["run"], GLYPHS["checks"]
+    return {run["in_progress"]: C_GREEN, run["queued"]: C_YELLOW,
+            run["failed"]: C_RED, run["stuck"]: C_RED,
+            run["success"]: C_GREEN, chk["red"]: C_RED,
+            chk["pending"]: C_YELLOW, chk["green"]: C_GREEN}.get(glyph, C_DIM)
+
+
+def _ci_marks():
+    """The two-column glyph slots a CI row can open with, per dialect."""
+    glyphs = (set(GLYPHS["run"].values()) | set(GLYPHS["checks"].values())
+              | {GLYPHS["nodata"]})
+    return {("%-2s" % g)[:2] for g in glyphs}
+
+
 def _ci_row_spans(line):
-    glyph = line[:2]
-    color = {"> ": C_GREEN, ". ": C_YELLOW, "X ": C_RED, "! ": C_RED,
-             "ok": C_GREEN}.get(glyph, C_DIM)
+    color = _ci_glyph_color(line[:2].strip())
     return [(0, 2, color, color in (C_RED,)),
             (3, 14, C_BLUE, True),  # identity role: repo names are bold blue
             (18, max(0, len(line) - 18), C_DIM, False)]
@@ -1162,35 +1340,68 @@ def _subagent_row_spans(line):
             (26, max(0, len(line) - 26), C_DIM, False)]        # task
 
 
-def colorize_block(lines, row_is, row_spans):
-    """[(text, spans)] for one render()-side block (session/ci/commit/sub).
+def _block_spans(line, row_is, row_spans):
+    """Spans for one body line of a block (session/ci/commit/sub).
 
     Title, separator and placeholder lines are recognised generically --
     they're a small closed set of literal strings shared by every block --
     so only genuine data rows need a block-specific `row_is`/`row_spans`.
     """
-    out = []
-    for line in lines:
-        stripped = line.rstrip()
-        if stripped in _TITLES:
-            out.append((line, [(0, len(stripped), C_CYAN, True)]))
-        elif stripped and set(stripped) == {"-"}:
-            out.append((line, [(0, len(stripped), C_CYAN, False)]))
-        elif stripped.startswith("QUIET ("):
-            out.append((line, [(0, len(stripped), C_DIM, False)]))
-        elif stripped.startswith("note:") or stripped.startswith("gh unavailable"):
-            out.append((line, [(0, len(stripped), C_YELLOW, False)]))
-        elif stripped in _PLACEHOLDERS or stripped.endswith("collecting...") or not stripped:
-            out.append((line, [(0, len(stripped), C_DIM, False)] if stripped else []))
-        elif stripped.startswith("..."):
-            # "... N more" truncation notices take the attention colour --
-            # a cut list dressed in the dim base would be a silent cut.
-            out.append((line, [(0, len(stripped), C_YELLOW, False)]))
-        elif row_is(line):
-            out.append((line, row_spans(line)))
-        else:
-            out.append((line, []))
-    return out
+    stripped = line.rstrip()
+    if stripped in _TITLES:
+        return [(0, len(stripped), C_CYAN, True)]
+    if stripped and set(stripped) == {"-"}:
+        return [(0, len(stripped), C_CYAN, False)]
+    if stripped.startswith("QUIET ("):
+        return [(0, len(stripped), C_DIM, False)]
+    if stripped.startswith("note:") or stripped.startswith("gh unavailable"):
+        return [(0, len(stripped), C_YELLOW, False)]
+    if (stripped in _PLACEHOLDERS
+            or stripped.endswith("collecting" + GLYPHS["more"])
+            or not stripped):
+        return [(0, len(stripped), C_DIM, False)] if stripped else []
+    if stripped.startswith(GLYPHS["more"]):
+        # "... N more" truncation notices take the attention colour --
+        # a cut list dressed in the dim base would be a silent cut.
+        return [(0, len(stripped), C_YELLOW, False)]
+    if row_is(line):
+        return row_spans(line)
+    return []
+
+
+def _framed_spans(line, spans_fn):
+    """Spans for one frame_lines() line: chrome borders, spans_fn inside.
+
+    The frame is chrome-cyan and dim -- legbar has no focus concept, and
+    the charter reserves the bold border for a focused pane. The title in
+    the top border is the one bold run. Body spans come from spans_fn over
+    the inner text and are shifted right past the border.
+    """
+    G = GLYPHS
+    n = len(line)
+    if line[:1] == G["tl"]:
+        spans = [(0, n, C_CYAN, "dim")]
+        label = re.match("^%s%s( \\S[^%s]*? )%s" % (G["tl"], G["h"], G["h"],
+                                                    G["h"]), line)
+        if label:
+            spans.append((2, len(label.group(1)), C_CYAN, True))
+        return spans
+    if line[:1] == G["bl"]:
+        return [(0, n, C_CYAN, "dim")]
+    if line[:1] == G["v"]:
+        spans = [(0, 1, C_CYAN, "dim"), (n - 1, 1, C_CYAN, "dim")]
+        spans += [(s + 2, ln, pair, bold)
+                  for s, ln, pair, bold in spans_fn(line[2:n - 2])]
+        return spans
+    return spans_fn(line)
+
+
+def colorize_block(lines, row_is, row_spans):
+    """[(text, spans)] for one render()-side block, frame-aware."""
+    spans_fn = lambda l: _block_spans(l, row_is, row_spans)
+    if GLYPHS["frames"]:
+        return [(l, _framed_spans(l, spans_fn)) for l in lines]
+    return [(l, spans_fn(l)) for l in lines]
 
 
 def colorize_header(line):
@@ -1219,37 +1430,45 @@ def colorize_header(line):
     return spans
 
 
+def _band_spans(line):
+    """Whole-line colour for one NEEDS YOU row, by its leading marker --
+    the marker comes from GLYPHS, so the sigil and colour swap together."""
+    stripped = line.rstrip()
+    if stripped in _TITLES:
+        return [(0, len(stripped), C_CYAN, True)]
+    if stripped and set(stripped) == {"-"}:
+        return [(0, len(stripped), C_CYAN, False)]
+    if line[:2] == GLYPHS["contested"]:
+        return [(0, len(stripped), C_RED, True)]
+    if line[:2] == GLYPHS["attention"]:
+        return [(0, len(stripped), C_YELLOW, True)]
+    if stripped.lstrip().startswith(GLYPHS["more"]):
+        # The overflow notice: a hidden contested tree is the exact thing
+        # this band exists to stop happening, so the notice takes the
+        # attention colour, never the dim base.
+        return [(0, len(stripped), C_YELLOW, False)]
+    if stripped:
+        return [(0, len(stripped), C_DIM, False)]
+    return []
+
+
 def colorize_band(lines):
-    """NEEDS YOU band: whole-line colour by the leading !!/ !/'  ' marker."""
-    out = []
-    for line in lines:
-        stripped = line.rstrip()
-        if stripped in _TITLES:
-            out.append((line, [(0, len(stripped), C_CYAN, True)]))
-        elif stripped and set(stripped) == {"-"}:
-            out.append((line, [(0, len(stripped), C_CYAN, False)]))
-        elif line[:2] == "!!":
-            out.append((line, [(0, len(stripped), C_RED, True)]))
-        elif line[:2] == " !":
-            out.append((line, [(0, len(stripped), C_YELLOW, True)]))
-        elif stripped.lstrip().startswith("..."):
-            # The overflow notice: a hidden contested tree is the exact thing
-            # this band exists to stop happening, so the notice takes the
-            # attention colour, never the dim base.
-            out.append((line, [(0, len(stripped), C_YELLOW, False)]))
-        elif stripped:
-            out.append((line, [(0, len(stripped), C_DIM, False)]))
-        else:
-            out.append((line, []))
-    return out
+    """NEEDS YOU band: [(text, spans)], frame-aware like colorize_block."""
+    if GLYPHS["frames"]:
+        return [(l, _framed_spans(l, _band_spans)) for l in lines]
+    return [(l, _band_spans(l)) for l in lines]
 
 
 def colorize_sessions(state, width):
     show_git = bool(state.get("use_git", True))
+    # Span offsets are computed against the width the rows were laid out
+    # at -- inside a frame that is the inner width, not the pane width.
+    bw = inner_width(width)
     return colorize_block(
         session_lines(state, width),
-        row_is=lambda l: l[:1] in (" ", "!") and l[1:4] in ("cc-", "cu-"),
-        row_spans=lambda l: _session_row_spans(l, show_git, width))
+        row_is=lambda l: (l[:1] in (" ", GLYPHS["flag"])
+                          and l[1:4] in ("cc-", "cu-")),
+        row_spans=lambda l: _session_row_spans(l, show_git, bw))
 
 
 def colorize_subagents(state, width):
@@ -1263,7 +1482,7 @@ def colorize_subagents(state, width):
 def colorize_ci(state, width):
     return colorize_block(
         ci_lines(state, width),
-        row_is=lambda l: l[:2] in ("> ", ". ", "X ", "! ", "ok", "- "),
+        row_is=lambda l: l[:2] in _ci_marks(),
         row_spans=_ci_row_spans)
 
 
@@ -1303,8 +1522,12 @@ def paint(scr, curses, state, width, h_avail, colors=True):
         for start, length, pair, bold in spans:
             if length <= 0:
                 continue
-            attr = curses.color_pair(pair) | (curses.A_BOLD if bold else 0)
-            if pair == C_DIM and not bold:
+            # bold is True / False / "dim": frame borders ask for the dim
+            # attribute explicitly (chrome at rest, per the charter), which
+            # is a state the pair alone cannot express.
+            attr = curses.color_pair(pair) | (curses.A_BOLD if bold is True
+                                              else 0)
+            if (pair == C_DIM and not bold) or bold == "dim":
                 attr |= curses.A_DIM
             put(text[start:start + length], x0 + start, attr)
 
@@ -1779,6 +2002,10 @@ def main(argv=None):
                     help="skip the gh sweep (offline, or when it is slow)")
     ap.add_argument("--no-color", action="store_true",
                     help="disable colour output in the full-screen view")
+    ap.add_argument("--ascii", action="store_true",
+                    help="force the ASCII glyph dialect even on a UTF-8 "
+                         "terminal (LEGBAR_ASCII=1 does the same); pipes, "
+                         "--once and --json are always ASCII")
     ap.add_argument("--no-auto-install", action="store_true",
                     help="on Windows, never offer to pip-install "
                          "windows-curses; just print the manual command")
@@ -1799,6 +2026,9 @@ def main(argv=None):
     WAITING_LOUD_SECS = max(0.0, args.waiting_alert) * 60
 
     if args.json:
+        # Pipe-safe output is always the ASCII dialect, whatever the
+        # terminal could display -- it exists to be parsed and diffed.
+        set_dialect(False)
         # version first: anything programmatic reading this stream should
         # not have to shell out to --version to learn which schema it got.
         out = {"version": __version__}
@@ -1806,11 +2036,19 @@ def main(argv=None):
         print(json.dumps(out, indent=2, default=str))
         return 0
     if args.once or not sys.stdout.isatty():
+        # Same rule: one-shot frames are for pipes, CI logs and snapshot
+        # tests, so they stay byte-stable ASCII even on a UTF-8 tty.
+        set_dialect(False)
         width = shutil.get_terminal_size((160, 24)).columns
         state = collect(use_git=not args.no_git, ci=not args.no_ci)
         print("\n".join(render(state, width - 1)))
         return 0
 
+    # The interactive view probes its terminal once and holds the answer
+    # for the session -- the charter's "chosen by the terminal, not the
+    # product". --ascii (or LEGBAR_ASCII, inside unicode_capable) forces
+    # the fallback.
+    set_dialect(not args.ascii and unicode_capable())
     run_curses(args)
     return 0
 

@@ -1131,5 +1131,438 @@ class ResizeCoalescing(unittest.TestCase):
             legbar.coalesce_resize(_FakeScr([self.RS] * 8), _FakeCurses())
 
 
+class DialectProbe(unittest.TestCase):
+    """unicode_capable(): interactive UTF-8 stdout and nothing else.
+
+    The charter's "chosen by the terminal, not the product": the probe runs
+    once at startup and the answer holds for the session. Everything here
+    uses fake stdout objects -- the real console under the test runner is
+    exactly the thing the probe must not consult in a test.
+    """
+
+    class Out:
+        def __init__(self, encoding="utf-8", tty=True):
+            self.encoding = encoding
+            self._tty = tty
+
+        def isatty(self):
+            return self._tty
+
+    def test_an_interactive_utf8_stdout_gets_unicode(self):
+        for enc in ("utf-8", "UTF-8", "utf8", "utf_8"):
+            self.assertTrue(legbar.unicode_capable(self.Out(enc), {}), enc)
+
+    def test_the_legacy_codepage_console_gets_ascii(self):
+        for enc in ("cp1252", "cp437", "latin-1", "", None):
+            self.assertFalse(legbar.unicode_capable(self.Out(enc), {}), enc)
+
+    def test_a_pipe_gets_ascii_whatever_its_encoding(self):
+        self.assertFalse(legbar.unicode_capable(self.Out(tty=False), {}))
+
+    def test_a_stdout_with_no_isatty_gets_ascii(self):
+        class Bare:
+            encoding = "utf-8"
+        self.assertFalse(legbar.unicode_capable(Bare(), {}))
+
+    def test_the_env_override_forces_ascii(self):
+        self.assertFalse(legbar.unicode_capable(self.Out(),
+                                                {"LEGBAR_ASCII": "1"}))
+
+    def test_an_empty_env_override_does_not_force(self):
+        self.assertTrue(legbar.unicode_capable(self.Out(),
+                                               {"LEGBAR_ASCII": ""}))
+
+    def test_the_module_default_is_ascii(self):
+        # Import-time state: anything that renders before main() decides
+        # (tests, library use) must get the pipe-safe dialect.
+        self.assertIs(legbar._ASCII_GLYPHS["frames"], False)
+        self.assertFalse(legbar.GLYPHS["frames"])
+
+
+class DialectWiring(unittest.TestCase):
+    """main() holds one dialect decision per invocation path."""
+
+    def setUp(self):
+        self.addCleanup(legbar.set_dialect, False)
+
+    def fake_stdout(self):
+        import io
+
+        class Out(io.StringIO):
+            encoding = "utf-8"
+
+            def isatty(self):
+                return True
+        return Out()
+
+    def test_the_interactive_path_probes_and_holds(self):
+        from unittest import mock
+        with mock.patch.object(legbar, "run_curses") as rc, \
+             mock.patch.object(legbar.sys, "stdout", self.fake_stdout()), \
+             mock.patch.dict(legbar.os.environ, {"LEGBAR_ASCII": ""}):
+            legbar.main([])
+        rc.assert_called_once()
+        self.assertIs(legbar.GLYPHS, legbar._UNICODE_GLYPHS)
+
+    def test_the_ascii_flag_overrides_a_capable_terminal(self):
+        from unittest import mock
+        legbar.set_dialect(True)
+        with mock.patch.object(legbar, "run_curses"), \
+             mock.patch.object(legbar.sys, "stdout", self.fake_stdout()), \
+             mock.patch.dict(legbar.os.environ, {"LEGBAR_ASCII": ""}):
+            legbar.main(["--ascii"])
+        self.assertIs(legbar.GLYPHS, legbar._ASCII_GLYPHS)
+
+    def test_the_env_var_overrides_a_capable_terminal(self):
+        from unittest import mock
+        legbar.set_dialect(True)
+        with mock.patch.object(legbar, "run_curses"), \
+             mock.patch.object(legbar.sys, "stdout", self.fake_stdout()), \
+             mock.patch.dict(legbar.os.environ, {"LEGBAR_ASCII": "1"}):
+            legbar.main([])
+        self.assertIs(legbar.GLYPHS, legbar._ASCII_GLYPHS)
+
+    def test_json_is_ascii_even_on_a_utf8_tty(self):
+        from unittest import mock
+        legbar.set_dialect(True)
+        with mock.patch.object(legbar, "collect",
+                               return_value={"sessions": []}), \
+             mock.patch.object(legbar.sys, "stdout", self.fake_stdout()):
+            legbar.main(["--json"])
+        self.assertIs(legbar.GLYPHS, legbar._ASCII_GLYPHS)
+
+
+class AsciiByteIdentity(unittest.TestCase):
+    """The ASCII path is the snapshot-stable one: --once must render today's
+    bytes even after a session held the Unicode dialect, and even on a
+    terminal that could display the Unicode tier."""
+
+    STATE = None  # built per test; a rich state exercising every marker
+
+    def rich_state(self):
+        return {
+            "sessions": [session(name="beta", status=henhouse.ATTENTION[0],
+                                 idle_secs=legbar.WAITING_LOUD_SECS + 1,
+                                 contested=True, worktree="/w/proj"),
+                         session(name="gamma", contested=True,
+                                 worktree="/w/proj"),
+                         session(name="alpha", status="working", idle_secs=3,
+                                 context_pct=42, subagents=1,
+                                 git={"staged": 0, "dirty": 2, "untracked": 0,
+                                      "ahead": 1, "behind": 0},
+                                 task="fix it")],
+            "ci": [{"kind": "run", "state": "failed", "repo": "r",
+                    "name": "ci", "ts": 0}],
+            "commits": [{"repo": "r", "ts": time.time(), "sha": "a",
+                         "author": "g", "refs": "",
+                         "subject": "s%d" % i}
+                        for i in range(legbar.COMMIT_LIMIT + 3)],
+            "subagents": [], "warn": "", "gh_warn": "", "use_git": True,
+        }
+
+    def test_once_is_ascii_even_on_a_utf8_tty(self):
+        import io
+        from unittest import mock
+
+        class Out(io.StringIO):
+            encoding = "utf-8"
+
+            def isatty(self):
+                return True
+
+        out = Out()
+        legbar.set_dialect(True)  # a previous session's answer must not leak
+        self.addCleanup(legbar.set_dialect, False)
+        with mock.patch.object(legbar, "collect",
+                               return_value=self.rich_state()), \
+             mock.patch.object(legbar.sys, "stdout", out):
+            legbar.main(["--once", "--no-git", "--no-ci"])
+        text = out.getvalue()
+        self.assertTrue(text.isascii(), text)
+        self.assertIs(legbar.GLYPHS, legbar._ASCII_GLYPHS)
+
+    def test_a_unicode_session_leaves_no_residue_in_ascii_renders(self):
+        # Render once in each dialect, then again in ASCII: the two ASCII
+        # frames must be byte-identical -- the dialect is one lookup table,
+        # not scattered state a swap could half-update.
+        st = self.rich_state()
+        legbar.set_dialect(False)
+        self.addCleanup(legbar.set_dialect, False)
+        before = legbar.render(st, 100)
+        legbar.set_dialect(True)
+        legbar.render(st, 100)
+        legbar.set_dialect(False)
+        after = legbar.render(st, 100)
+        # The header clock can tick between renders; compare the body.
+        self.assertEqual(before[1:], after[1:])
+
+    def test_the_ascii_markers_are_pinned(self):
+        # The exact bytes the ASCII dialect promises: the tests above prove
+        # stability across a swap, this pins the vocabulary itself.
+        st = self.rich_state()
+        legbar.set_dialect(False)
+        text = "\n".join(legbar.render(st, 100))
+        self.assertIn("!!", text)          # contested band marker
+        self.assertIn("X  r", text)        # failed CI run glyph
+        self.assertIn("^1", text)          # git drift ahead
+        self.assertIn("... 3 more", text)  # truncation notice
+        for line in text.splitlines():
+            self.assertTrue(line.isascii(), line)
+
+
+class UnicodeDialect(unittest.TestCase):
+    """The Unicode tier: rounded frames, leghorn's glyphs, no mixed frames."""
+
+    def setUp(self):
+        legbar.set_dialect(True)
+        self.addCleanup(legbar.set_dialect, False)
+        self.G = legbar.GLYPHS
+
+    def state(self, **kw):
+        s = {"sessions": [], "ci": [], "commits": [], "subagents": [],
+             "warn": "", "gh_warn": "", "use_git": True}
+        s.update(kw)
+        return s
+
+    def rich_state(self):
+        return self.state(
+            sessions=[session(name="beta", status=henhouse.ATTENTION[0],
+                              idle_secs=legbar.WAITING_LOUD_SECS + 1,
+                              contested=True, worktree="/w/proj",
+                              task="review"),
+                      session(name="gamma", contested=True,
+                              worktree="/w/proj"),
+                      session(name="alpha", status="working", idle_secs=3,
+                              context_pct=42, subagents=1,
+                              git={"staged": 0, "dirty": 2, "untracked": 0,
+                                   "ahead": 1, "behind": 2},
+                              task="fix the flaky test")],
+            ci=[{"kind": "run", "state": "failed", "repo": "r", "name": "ci",
+                 "ts": 0},
+                {"kind": "run", "state": "in_progress", "repo": "r2",
+                 "name": "ci", "ts": 0},
+                {"kind": "pr", "checks": "green", "repo": "r3", "number": 7,
+                 "title": "t", "ts": 0}],
+            commits=[{"repo": "r", "ts": time.time(), "sha": "a",
+                      "author": "g", "refs": "", "subject": "s%d" % i}
+                     for i in range(legbar.COMMIT_LIMIT + 3)])
+
+    def test_every_section_is_framed_at_forty_columns(self):
+        lines = legbar.render(self.rich_state(), 40)
+        text = "\n".join(lines)
+        for title in ("NEEDS YOU", "SESSIONS", "SUBAGENTS", "GITHUB",
+                      "COMMITS"):
+            self.assertIn("%s%s %s " % (self.G["tl"], self.G["h"], title),
+                          text, title)
+        for line in lines:
+            self.assertLessEqual(len(line), 40, line)
+
+    def test_frames_are_closed_and_balanced(self):
+        for width in (40, 80, 120, 160):
+            text = "\n".join(legbar.render(self.rich_state(), width))
+            self.assertEqual(text.count(self.G["tl"]), text.count(self.G["tr"]),
+                             width)
+            self.assertEqual(text.count(self.G["tl"]), text.count(self.G["bl"]),
+                             width)
+            self.assertEqual(text.count(self.G["bl"]), text.count(self.G["br"]),
+                             width)
+            self.assertGreaterEqual(text.count(self.G["tl"]), 5, width)
+
+    def test_split_layout_frames_both_columns(self):
+        lines = legbar.render(self.rich_state(), 160)
+        joined = next(l for l in lines if "SESSIONS" in l)
+        self.assertIn("GITHUB", joined)  # side by side, both framed
+        self.assertEqual(joined.count(self.G["tl"]), 2)
+        for line in lines:
+            self.assertLessEqual(len(line), 160, line)
+
+    def test_frame_content_never_touches_the_border(self):
+        # Inside a frame every content line is `(v) body (v)` with the body
+        # padded to the inner width and a space each side -- a body write
+        # into the border column is the "wrote into the last column" bug in
+        # frame form. Stacked widths only: one frame per line.
+        for width in (40, 100):
+            for line in legbar.render(self.rich_state(), width):
+                if not line.startswith(self.G["v"]):
+                    continue
+                self.assertEqual(len(line), width, (width, line))
+                self.assertTrue(line.endswith(self.G["v"]), (width, line))
+                self.assertEqual(line[1], " ", (width, line))
+                self.assertEqual(line[-2], " ", (width, line))
+
+    def test_no_ascii_markers_leak_into_a_unicode_frame(self):
+        # One frame, one dialect: the charter says a lone ASCII marker in a
+        # Unicode frame is a bug. The state above exercises every marker.
+        text = "\n".join(legbar.render(self.rich_state(), 100))
+        self.assertNotIn("!!", text)
+        self.assertNotIn("^1", text)
+        self.assertNotIn("v2", text)
+        self.assertNotIn("...", text)
+        self.assertNotIn("X  ", text)
+
+    def test_the_glyphs_swap_in(self):
+        text = "\n".join(legbar.render(self.rich_state(), 100))
+        self.assertIn(self.G["flag"], text)                    # contested
+        self.assertIn(self.G["run"]["failed"], text)           # CI red
+        self.assertIn(self.G["run"]["in_progress"], text)      # CI running
+        self.assertIn(self.G["checks"]["green"], text)         # PR green
+        self.assertIn("%s1" % self.G["ahead"], text)           # drift
+        self.assertIn("%s2" % self.G["behind"], text)
+        self.assertIn("%s 3 more" % self.G["more"], text)      # truncation
+
+    def test_the_context_bar_stays_ascii(self):
+        # Deliberate: leghorn has no bar, and the #/- meter is legbar's own
+        # vocabulary -- it does not swap with the dialect.
+        text = "\n".join(legbar.render(self.rich_state(), 100))
+        self.assertIn("####", text)
+
+    def test_clip_and_git_cell_speak_the_dialect(self):
+        self.assertEqual(legbar.clip("abcdefgh", 4), "abc" + self.G["cut"])
+        cell = legbar.git_cell(session(git={"staged": 0, "dirty": 2,
+                                            "untracked": 0, "ahead": 1,
+                                            "behind": 0}))
+        self.assertIn("%s1" % self.G["ahead"], cell)
+
+    def test_the_band_marker_and_colour_swap_together(self):
+        st = self.state(sessions=[session(name="a", contested=True,
+                                          worktree="/w/p"),
+                                  session(name="b", contested=True,
+                                          worktree="/w/p")])
+        rows = legbar.colorize_band(legbar.action_lines(st, 100))
+        text, spans = next((t, s) for t, s in rows if "CONTESTED" in t)
+        self.assertIn(self.G["contested"], text)
+        self.assertIn(legbar.C_RED, [s[2] for s in spans], (text, spans))
+
+    def test_ci_glyph_colours_come_from_the_same_table(self):
+        rows = legbar.colorize_ci(self.rich_state(), 60)
+        text, spans = next((t, s) for t, s in rows
+                           if self.G["run"]["failed"] in t)
+        # The glyph span (just past the border) is the failure colour.
+        glyph_span = next(s for s in spans if s[0] == 2)
+        self.assertEqual(glyph_span[2], legbar.C_RED)
+
+    def test_truncation_notices_keep_the_attention_colour(self):
+        rows = legbar.colorize_commits(self.rich_state(), 60)
+        text, spans = next((t, s) for t, s in rows if "3 more" in t)
+        self.assertIn(legbar.C_YELLOW, [s[2] for s in spans], (text, spans))
+
+    def test_frame_borders_are_chrome_and_dim_titles_bold(self):
+        rows = legbar.colorize_ci(self.state(), 60)
+        top_text, top_spans = rows[0]
+        self.assertTrue(top_text.startswith(self.G["tl"]))
+        self.assertEqual(top_spans[0][2], legbar.C_CYAN)
+        self.assertEqual(top_spans[0][3], "dim")  # no focus concept: dim
+        title = next(s for s in top_spans if s[3] is True)
+        self.assertEqual(title[2], legbar.C_CYAN)
+        self.assertEqual(top_text[title[0]:title[0] + title[1]], " GITHUB ")
+
+    def test_session_row_spans_survive_the_frame_shift(self):
+        # The colour layer must land on the framed columns: name span "cc-"
+        # sits two columns right of where the unframed row puts it.
+        st = self.state(sessions=[session(name="wagyu", status="working",
+                                          idle_secs=3, context_pct=10,
+                                          task="fix")])
+        rows = legbar.colorize_sessions(st, 100)
+        text, spans = next((t, s) for t, s in rows if "cc-wagyu" in t)
+        prefix = next(s for s in spans if s[0] == 3)  # 1 (flag) + 2 (border)
+        self.assertEqual(text[prefix[0]:prefix[0] + prefix[1]], "cc-")
+        self.assertEqual(prefix[2], legbar.C_BLUE)
+
+    def test_help_glossary_shows_the_unicode_glyphs(self):
+        text = "\n".join(legbar.help_lines(80))
+        self.assertIn(self.G["flag"], text)
+        self.assertIn("%s1 %s2" % (self.G["ahead"], self.G["behind"]), text)
+        self.assertIn(self.G["run"]["stuck"], text)
+        self.assertNotIn("!!", text)
+        self.assertNotIn("^1 v2", text)
+        # Attention deliberately keeps "!" -- the live dot already means
+        # running -- and the glossary still documents it.
+        self.assertIn("   !         waiting on you", text)
+
+
+class _SpanScr:
+    """A write-capturing stand-in for the curses window, for paint()."""
+
+    def __init__(self):
+        self.writes = []
+
+    def addstr(self, y, x, text, attr=0):
+        self.writes.append((y, x, text, attr))
+
+
+class _SpanCurses:
+    A_BOLD = 1
+    A_DIM = 2
+
+    class error(Exception):
+        pass
+
+    @staticmethod
+    def color_pair(n):
+        return n << 8
+
+
+class PaintFakeScreen(unittest.TestCase):
+    """paint() through the fake screen: both dialects, 40 and 100 columns.
+
+    render() proves the text; this proves the curses layer draws the same
+    frames without writing past the width -- including the "dim" border
+    attribute that only exists on this path.
+    """
+
+    def rich_state(self):
+        return {
+            "sessions": [session(name="beta", status=henhouse.ATTENTION[0],
+                                 idle_secs=legbar.WAITING_LOUD_SECS + 1,
+                                 contested=True, worktree="/w/proj",
+                                 task="review"),
+                         session(name="gamma", contested=True,
+                                 worktree="/w/proj")],
+            "ci": [{"kind": "run", "state": "failed", "repo": "r",
+                    "name": "ci", "ts": 0}],
+            "commits": [{"repo": "r", "ts": time.time(), "sha": "a",
+                         "author": "g", "refs": "", "subject": "s"}],
+            "subagents": [], "warn": "", "gh_warn": "", "use_git": True,
+        }
+
+    def paint(self, width):
+        scr = _SpanScr()
+        legbar.paint(scr, _SpanCurses, self.rich_state(), width, 50,
+                     colors=True)
+        return scr
+
+    def test_nothing_is_written_past_the_width(self):
+        for dialect in (False, True):
+            legbar.set_dialect(dialect)
+            self.addCleanup(legbar.set_dialect, False)
+            for width in (40, 100):
+                for y, x, text, attr in self.paint(width).writes:
+                    self.assertLessEqual(x + len(text), width,
+                                         (dialect, width, y, x, text))
+
+    def test_unicode_paint_draws_the_frames(self):
+        legbar.set_dialect(True)
+        self.addCleanup(legbar.set_dialect, False)
+        for width in (40, 100):
+            texts = [w[2] for w in self.paint(width).writes]
+            self.assertTrue(any(legbar.GLYPHS["tl"] in t for t in texts),
+                            width)
+
+    def test_the_dim_border_attribute_reaches_the_screen(self):
+        legbar.set_dialect(True)
+        self.addCleanup(legbar.set_dialect, False)
+        border = [w for w in self.paint(100).writes
+                  if w[2].startswith(legbar.GLYPHS["tl"])
+                  and w[3] & _SpanCurses.A_DIM]
+        self.assertTrue(border)
+
+    def test_ascii_paint_is_unchanged_in_shape(self):
+        legbar.set_dialect(False)
+        texts = [w[2] for w in self.paint(100).writes]
+        self.assertTrue(any(t.startswith("GITHUB") for t in texts))
+        self.assertTrue(any(set(t.rstrip()) == {"-"} for t in texts
+                            if t.strip()))
+
+
 if __name__ == "__main__":
     unittest.main()
