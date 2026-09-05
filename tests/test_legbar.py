@@ -658,13 +658,19 @@ class SessionRowColour(unittest.TestCase):
             task_start = 53 if show_git else 43
             self.assertEqual(self.span_at(spans, task_start)[0], task_start)
 
-    def test_the_task_column_starts_where_the_clip_budget_says(self):
-        # _session_row clips the task against these constants; if they drift
-        # from the format string the text is cut at the wrong place.
-        for show_git, fixed in ((False, legbar._SESSION_FIXED),
-                                (True, legbar._SESSION_FIXED_GIT)):
-            line, _ = self.row(show_git=show_git, task="X" * 40)
+    def test_the_task_column_starts_where_the_span_layer_says(self):
+        # _session_row derives the task's clip budget from the cells it
+        # actually laid out, and _session_row_spans walks the same cells;
+        # the task text must begin exactly where the span layer's trailing
+        # (task) span begins, at full width: 43 columns, 53 with git.
+        for show_git, fixed in ((False, 43), (True, 53)):
+            line, spans = self.row(show_git=show_git, task="X" * 40)
             self.assertEqual(line.index("X"), fixed, (show_git, line))
+            self.assertEqual(spans[-1][0], fixed, (show_git, spans))
+            # And the budget is honoured: the task fills to the width, no
+            # further.
+            line, _ = self.row(show_git=show_git, width=60, task="X" * 40)
+            self.assertEqual(len(line), 60, line)
 
 
 class WindowsCursesOffer(unittest.TestCase):

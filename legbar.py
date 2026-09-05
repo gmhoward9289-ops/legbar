@@ -795,12 +795,6 @@ def bucket(r):
     return BUCKET_QUIET
 
 
-# Fixed prefix before the free-text task (no status column -- the bucket label
-# and wait cell already say what status said) at full width; _row_cells()
-# computes the sheds below these. Keep in sync with _session_row.
-_SESSION_FIXED = 43
-_SESSION_FIXED_GIT = 53
-
 # The row's payload is the task text; every other cell yields to it. Below
 # this many spare columns the optional cells shed in a designed order --
 # context bar first (the pct number survives it), then the git cell, then
