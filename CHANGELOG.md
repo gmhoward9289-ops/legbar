@@ -17,6 +17,19 @@ already says the API may move.
   becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
   the same build. `release.yml` checks the normalisation on every tag.
 
+## v0.3.8 - 2026-09-05
+
+### Added
+- conform to the leghorn design language (#41)
+
+### Fixed
+- write the CHANGELOG entry during the automated patch bump (#44)
+- request bright blue by COLOR_BLUE+8, not xterm index 12 (PDCurses orders colors differently) (#43)
+- normalize status at every ATTENTION comparison site
+
+### Changed
+- mint release and tap tokens from a GitHub App instead of PATs
+
 ## v0.3.7 - 2026-08-30
 
 ### Added
