@@ -36,21 +36,50 @@ PY
 
 echo "bumping $CURRENT -> $NEXT"
 
-sed -i "s/^__version__ = \".*\"/__version__ = \"$NEXT\"/" legbar.py
-
-MONTH=$(date +%B)
-YEAR=$(date +%Y)
-sed -i "1s/.*/.TH LEGBAR 1 \"$MONTH $YEAR\" \"legbar $NEXT\" \"User Commands\"/" legbar.1
-
 case $NEXT in
   *.*.*) NPM=$NEXT ;;
   *.*)   NPM=$NEXT.0 ;;
   *)     NPM=$NEXT.0.0 ;;
 esac
-sed -i "s/^\([[:space:]]*\"version\"[[:space:]]*:[[:space:]]*\)\"[^\"]*\"/\1\"$NPM\"/" package.json
 
-sed -i "s#releases/download/v[^/]*/legbar-[^/]*\.tar\.gz#releases/download/v$NEXT/legbar-$NEXT.tar.gz#g" packaging/legbar.rb
-sed -i "s/^  version \".*\"/  version \"$NEXT\"/" packaging/legbar.rb
+# In-place edits go through python3 rather than `sed -i`: GNU sed takes an
+# optional suffix after -i, BSD sed (macOS) requires one, so a bare `sed -i`
+# is a syntax error on half the CI matrix. python3 is already required above.
+# Each edit asserts it matched, so a reworded man header or a moved formula
+# field fails the bump instead of silently leaving one artifact stale.
+BUMP_NEXT="$NEXT" BUMP_NPM="$NPM" BUMP_MONTH="$(date +%B)" BUMP_YEAR="$(date +%Y)" python3 - <<'PY'
+import os
+import re
+import sys
+
+nxt, npm = os.environ["BUMP_NEXT"], os.environ["BUMP_NPM"]
+month, year = os.environ["BUMP_MONTH"], os.environ["BUMP_YEAR"]
+
+# Patterns avoid `.*$` so a CRLF checkout (Windows dev box) keeps its line
+# endings intact rather than swallowing the \r into the replacement.
+EDITS = [
+    ("legbar.py",
+     r'^__version__ = "[^"\r\n]*"', f'__version__ = "{nxt}"'),
+    ("legbar.1",
+     r'\A[^\r\n]*', f'.TH LEGBAR 1 "{month} {year}" "legbar {nxt}" "User Commands"'),
+    ("package.json",
+     r'^([ \t]*"version"[ \t]*:[ \t]*)"[^"]*"', rf'\g<1>"{npm}"'),
+    ("packaging/legbar.rb",
+     r'releases/download/v[^/]*/legbar-[^/]*\.tar\.gz',
+     f'releases/download/v{nxt}/legbar-{nxt}.tar.gz'),
+    ("packaging/legbar.rb",
+     r'^  version "[^"\r\n]*"', f'  version "{nxt}"'),
+]
+
+for path, pattern, repl in EDITS:
+    with open(path, encoding="utf-8", newline="") as fh:
+        text = fh.read()
+    text, n = re.subn(pattern, repl, text, flags=re.M)
+    if n == 0:
+        sys.exit(f"FATAL: {path}: no line matched {pattern!r}")
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
+PY
 
 # --- CHANGELOG.md -------------------------------------------------------------
 # check-version-consistency.sh requires the newest `## v` heading to equal
