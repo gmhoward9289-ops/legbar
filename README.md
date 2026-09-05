@@ -162,6 +162,7 @@ configured; the new name wins when both are set.
 | `LEGBAR_CURSOR_STATE_DB` | Cursor `state.vscdb` | composerHeaders (CTX% / names) |
 | `LEGBAR_BACKENDS` | `claude,cursor` | which discovery lanes run at all |
 | `LEGBAR_ASCII` | unset | any non-empty value forces the ASCII glyph dialect |
+| `LEGBAR_UNICODE` | unset | any non-empty value allows the Unicode dialect on a Windows console outside Windows Terminal |
 
 ## Two honest caveats
 
@@ -180,17 +181,22 @@ naive split rather than raising.
 ## Two glyph dialects, chosen by the terminal
 
 At startup the interactive view probes its terminal once: an interactive
-stdout whose encoding is UTF-8 (Windows Terminal, any modern emulator) gets
-the **Unicode tier** — rounded pane frames (`╭─ SESSIONS ─╮`) in chrome cyan
-and `leghorn`'s glyph vocabulary (`◉` contested, `✗`/`✓`/`●`/`○`/`◍` for CI,
-`↑n ↓n` git drift, `…` for anything cut short). Anything else keeps the
-**ASCII dialect**: the legacy Windows console mojibakes block drawing, and
-pipe-safe surfaces (`--once`, `--json`, a redirect) must stay byte-stable for
-snapshots and scripts, so they are always ASCII. The context bar (`####--`)
-is legbar's own vocabulary and stays ASCII in both dialects.
+stdout whose encoding is UTF-8 gets the **Unicode tier** — rounded pane
+frames (`╭─ SESSIONS ─╮`) in chrome cyan and `leghorn`'s glyph vocabulary
+(`◉` contested, `✗`/`✓`/`●`/`○`/`◍` for CI, `↑n ↓n` git drift, `…` for
+anything cut short). On Windows the encoding alone cannot decide it — every
+console has reported `utf-8` since PEP 528, code page or not — so Windows
+Terminal is the signal (`WT_SESSION` in the environment); a bare console,
+where block drawing mojibakes, keeps the **ASCII dialect**. So do the
+pipe-safe surfaces (`--once`, `--json`, a redirect), which exist to be
+diffed and parsed. The context bar (`##########`) is legbar's own vocabulary
+and stays ASCII in both dialects.
 
-Force the fallback with `--ascii` or `LEGBAR_ASCII=1`. A frame never mixes
-dialects, and the `?` help glossary shows whichever set is on screen.
+Force the fallback with `--ascii` or `LEGBAR_ASCII=1`; force the Unicode
+tier on a Windows console you know can draw it (a `chcp 65001` conhost with
+a Unicode font, ConEmu) with `LEGBAR_UNICODE=1`. A frame never mixes
+dialects, and the `?` help — framed like the panes in Unicode mode — shows
+whichever glyph set is on screen.
 
 ```
        ,__

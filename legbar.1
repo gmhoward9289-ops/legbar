@@ -53,10 +53,13 @@ case someone is looking at when they are debugging why nothing is running.
 .PP
 The output speaks one of two glyph dialects, chosen by the terminal at
 startup: an interactive UTF-8 stdout gets rounded pane frames and Unicode
-status glyphs; the legacy Windows console \- where block drawing mojibakes \-
-and every pipe-safe surface (\fB\-\-once\fR, \fB\-\-json\fR, a redirect) keep
-the byte-stable ASCII rendering. \fB\-\-ascii\fR or \fBLEGBAR_ASCII=1\fR
-forces the fallback. The context bar is ASCII in both dialects.
+status glyphs. On Windows the encoding alone cannot decide it (every console
+reports utf-8 since PEP 528), so Windows Terminal \- \fBWT_SESSION\fR in the
+environment \- is the signal; a bare console, where block drawing mojibakes,
+keeps ASCII, as does every pipe-safe surface (\fB\-\-once\fR, \fB\-\-json\fR,
+a redirect). \fB\-\-ascii\fR or \fBLEGBAR_ASCII=1\fR forces the fallback;
+\fBLEGBAR_UNICODE=1\fR forces the Unicode tier on a Windows console known to
+draw it. The context bar is ASCII in both dialects.
 .SH OPTIONS
 .TP
 .BR \-1 ", " \-\-once
@@ -81,7 +84,8 @@ Disable colour in the full-screen view. \fBNO_COLOR\fR does the same.
 .B \-\-ascii
 Force the ASCII glyph dialect even on a UTF-8 terminal.
 \fBLEGBAR_ASCII=1\fR does the same. Pipes, \fB\-\-once\fR and \fB\-\-json\fR
-are always ASCII regardless.
+are always ASCII regardless, and so is a Windows console outside Windows
+Terminal unless \fBLEGBAR_UNICODE=1\fR.
 .TP
 .B \-\-no\-auto\-install
 Windows only. When the full-screen view finds no
@@ -163,6 +167,16 @@ Cursor user data dir. Legacy: \fBROOST_CURSOR_STATE_DB\fR.
 .B LEGBAR_BACKENDS
 Which discovery lanes run at all (default \fBclaude,cursor\fR). Legacy:
 \fBROOST_BACKENDS\fR.
+.TP
+.B LEGBAR_ASCII
+Any non-empty value forces the ASCII glyph dialect, like \fB\-\-ascii\fR.
+Wins over \fBLEGBAR_UNICODE\fR when both are set.
+.TP
+.B LEGBAR_UNICODE
+Any non-empty value allows the Unicode dialect on a Windows console that is
+not Windows Terminal (no \fBWT_SESSION\fR) \- for a conhost running
+\fBchcp 65001\fR with a Unicode font, or ConEmu. The stdout must still be an
+interactive UTF-8 tty; pipes stay ASCII.
 .SH SEE ALSO
 .BR gh (1),
 .BR git (1)

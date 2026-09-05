@@ -1132,12 +1132,14 @@ class ResizeCoalescing(unittest.TestCase):
 
 
 class DialectProbe(unittest.TestCase):
-    """unicode_capable(): interactive UTF-8 stdout and nothing else.
+    """unicode_capable(): an interactive UTF-8 stdout, and on Windows only
+    under Windows Terminal.
 
     The charter's "chosen by the terminal, not the product": the probe runs
     once at startup and the answer holds for the session. Everything here
-    uses fake stdout objects -- the real console under the test runner is
-    exactly the thing the probe must not consult in a test.
+    uses fake stdout objects and an explicit platform -- the real console
+    under the test runner is exactly the thing the probe must not consult
+    in a test.
     """
 
     class Out:
@@ -1148,29 +1150,68 @@ class DialectProbe(unittest.TestCase):
         def isatty(self):
             return self._tty
 
-    def test_an_interactive_utf8_stdout_gets_unicode(self):
-        for enc in ("utf-8", "UTF-8", "utf8", "utf_8"):
-            self.assertTrue(legbar.unicode_capable(self.Out(enc), {}), enc)
+    def probe(self, out=None, env=None, platform="linux"):
+        return legbar.unicode_capable(out or self.Out(), env or {}, platform)
 
-    def test_the_legacy_codepage_console_gets_ascii(self):
+    def test_an_interactive_utf8_stdout_gets_unicode_off_windows(self):
+        for enc in ("utf-8", "UTF-8", "utf8", "utf_8"):
+            for platform in ("linux", "darwin", "freebsd13"):
+                self.assertTrue(self.probe(self.Out(enc), platform=platform),
+                                (enc, platform))
+
+    def test_a_non_utf8_encoding_gets_ascii_everywhere(self):
         for enc in ("cp1252", "cp437", "latin-1", "", None):
-            self.assertFalse(legbar.unicode_capable(self.Out(enc), {}), enc)
+            for platform in ("linux", "win32"):
+                self.assertFalse(self.probe(self.Out(enc),
+                                            {"WT_SESSION": "x"}, platform),
+                                 (enc, platform))
+
+    def test_a_bare_windows_console_gets_ascii_despite_utf8(self):
+        # PEP 528: every Windows console stdout says utf-8, code page or
+        # not, so the encoding alone must not unlock the Unicode tier.
+        self.assertFalse(self.probe(self.Out("utf-8"), {}, "win32"))
+
+    def test_windows_terminal_gets_unicode(self):
+        self.assertTrue(self.probe(self.Out("utf-8"),
+                                   {"WT_SESSION": "7e1c-guid"}, "win32"))
+
+    def test_windows_terminal_still_needs_a_tty(self):
+        self.assertFalse(self.probe(self.Out(tty=False),
+                                    {"WT_SESSION": "7e1c-guid"}, "win32"))
+
+    def test_the_unicode_override_unlocks_a_bare_windows_console(self):
+        self.assertTrue(self.probe(self.Out("utf-8"),
+                                   {"LEGBAR_UNICODE": "1"}, "win32"))
+
+    def test_the_unicode_override_cannot_unlock_a_pipe(self):
+        self.assertFalse(self.probe(self.Out(tty=False),
+                                    {"LEGBAR_UNICODE": "1"}, "win32"))
+
+    def test_ascii_wins_when_both_overrides_are_set(self):
+        self.assertFalse(self.probe(self.Out(), {"LEGBAR_UNICODE": "1",
+                                                 "LEGBAR_ASCII": "1"},
+                                    "win32"))
 
     def test_a_pipe_gets_ascii_whatever_its_encoding(self):
-        self.assertFalse(legbar.unicode_capable(self.Out(tty=False), {}))
+        self.assertFalse(self.probe(self.Out(tty=False)))
 
     def test_a_stdout_with_no_isatty_gets_ascii(self):
         class Bare:
             encoding = "utf-8"
-        self.assertFalse(legbar.unicode_capable(Bare(), {}))
+        self.assertFalse(self.probe(Bare()))
 
     def test_the_env_override_forces_ascii(self):
-        self.assertFalse(legbar.unicode_capable(self.Out(),
-                                                {"LEGBAR_ASCII": "1"}))
+        self.assertFalse(self.probe(env={"LEGBAR_ASCII": "1"}))
 
     def test_an_empty_env_override_does_not_force(self):
-        self.assertTrue(legbar.unicode_capable(self.Out(),
-                                               {"LEGBAR_ASCII": ""}))
+        self.assertTrue(self.probe(env={"LEGBAR_ASCII": ""}))
+
+    def test_the_probe_defaults_to_the_running_platform(self):
+        from unittest import mock
+        with mock.patch.object(legbar.sys, "platform", "win32"):
+            self.assertFalse(legbar.unicode_capable(self.Out(), {}))
+        with mock.patch.object(legbar.sys, "platform", "linux"):
+            self.assertTrue(legbar.unicode_capable(self.Out(), {}))
 
     def test_the_module_default_is_ascii(self):
         # Import-time state: anything that renders before main() decides
@@ -1197,9 +1238,11 @@ class DialectWiring(unittest.TestCase):
 
     def test_the_interactive_path_probes_and_holds(self):
         from unittest import mock
+        # WT_SESSION so the probe says yes on a Windows test runner too.
         with mock.patch.object(legbar, "run_curses") as rc, \
              mock.patch.object(legbar.sys, "stdout", self.fake_stdout()), \
-             mock.patch.dict(legbar.os.environ, {"LEGBAR_ASCII": ""}):
+             mock.patch.dict(legbar.os.environ, {"LEGBAR_ASCII": "",
+                                                 "WT_SESSION": "t"}):
             legbar.main([])
         rc.assert_called_once()
         self.assertIs(legbar.GLYPHS, legbar._UNICODE_GLYPHS)

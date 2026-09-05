@@ -23,13 +23,17 @@ Two lanes, one canvas:
 
 Two glyph dialects, one vocabulary -- chosen by the terminal, not the
 product (see the design charter). An interactive stdout that speaks UTF-8
-(Windows Terminal, any modern emulator) gets the Unicode tier: rounded pane
-frames and leghorn's glyph vocabulary. The legacy Windows console -- where
-block drawing mojibakes -- and every pipe-safe surface (--once, --json, a
-redirect) keep the ASCII rendering, byte for byte. The probe runs once at
-startup and holds for the session; LEGBAR_ASCII=1 or --ascii forces the
-fallback. The source file itself stays ASCII (the Unicode table ships as
-escapes) so it can never mojibake anywhere either.
+gets the Unicode tier: rounded pane frames and leghorn's glyph vocabulary.
+On Windows the encoding alone cannot decide it (every console reports
+utf-8 since PEP 528), so Windows Terminal -- WT_SESSION in the environment
+-- is the signal; a bare console keeps ASCII, where block drawing would
+mojibake. Every pipe-safe surface (--once, --json, a redirect) keeps ASCII
+too, and the Unicode-to-ASCII swap is byte-stable: one lookup table, so an
+ASCII render is the same bytes whether or not a Unicode session ran first.
+The probe runs once at startup and holds for the session; LEGBAR_ASCII=1
+or --ascii forces the fallback, LEGBAR_UNICODE=1 forces the tier on a
+Windows console you know can draw it. The source file itself stays ASCII
+(the Unicode table ships as escapes) so it can never mojibake anywhere.
 
 Read-only. It reads transcripts and registries, and runs `git` and `gh` in
 read-only modes. It never writes to a repo.
@@ -142,10 +146,11 @@ def clip(text, width):
 # glyph dialects -- two tables, one vocabulary (the design charter's "chosen
 # by the terminal, not the product"). Which table renders is a runtime
 # capability decision made once at startup, the same way colour inherits the
-# terminal's theme: an interactive UTF-8 stdout gets the Unicode tier, the
-# legacy console and every pipe-safe surface (--once, --json, redirects) get
-# ASCII. A frame must never mix dialects, so every marker comes from GLYPHS
-# and colorize reads the same table back -- one lookup, selected once.
+# terminal's theme: an interactive UTF-8 stdout gets the Unicode tier (on
+# Windows, only under Windows Terminal -- see unicode_capable), a bare
+# Windows console and every pipe-safe surface (--once, --json, redirects)
+# get ASCII. A frame must never mix dialects, so every marker comes from
+# GLYPHS and colorize reads the same table back -- one lookup, selected once.
 #
 # The Unicode table is written as \u escapes on purpose: the source file
 # stays ASCII (CI asserts it), so the file itself is pipe-safe everywhere
@@ -206,17 +211,27 @@ def set_dialect(unicode_ok):
     GLYPHS = _UNICODE_GLYPHS if unicode_ok else _ASCII_GLYPHS
 
 
-def unicode_capable(stdout=None, environ=None):
+def unicode_capable(stdout=None, environ=None, platform=None):
     """The startup probe behind the two dialects.
 
-    An interactive stdout whose encoding is UTF-8 can display the Unicode
-    tier; anything else -- the legacy-codepage Windows console (cp437,
-    cp1252), a pipe, a redirect -- cannot be trusted with it and keeps
-    ASCII. LEGBAR_ASCII (any non-empty value) forces ASCII for users and
-    tests, the way NO_COLOR forces monochrome.
+    Unicode iff stdout is interactive, its encoding is UTF-8, and -- on
+    Windows -- the console is one that can actually draw it. A pipe or a
+    redirect can never be trusted with the Unicode tier and keeps ASCII.
+
+    The Windows leg is the subtle one. Since PEP 528 (Python 3.6) every
+    Windows console stdout reports encoding utf-8 whatever code page it
+    runs, so the encoding cannot tell the legacy conhost (whose raster
+    fonts and code pages mojibake box drawing) from Windows Terminal. The
+    signal that can is WT_SESSION, which Windows Terminal sets in every
+    shell it hosts; a bare console without it keeps ASCII. LEGBAR_UNICODE
+    (any non-empty value) overrides that leg for a console the user knows
+    is capable -- a chcp 65001 conhost with a Unicode font, ConEmu -- and
+    LEGBAR_ASCII (any non-empty value) forces ASCII everywhere, the way
+    NO_COLOR forces monochrome. ASCII wins when both are set.
     """
     stdout = sys.stdout if stdout is None else stdout
     environ = os.environ if environ is None else environ
+    platform = sys.platform if platform is None else platform
     if environ.get("LEGBAR_ASCII"):
         return False
     try:
@@ -225,7 +240,11 @@ def unicode_capable(stdout=None, environ=None):
     except (AttributeError, ValueError):
         return False
     enc = getattr(stdout, "encoding", None) or ""
-    return enc.lower().replace("-", "").replace("_", "") == "utf8"
+    if enc.lower().replace("-", "").replace("_", "") != "utf8":
+        return False
+    if platform.startswith("win"):
+        return bool(environ.get("WT_SESSION") or environ.get("LEGBAR_UNICODE"))
+    return True
 
 
 def inner_width(width):
@@ -2005,7 +2024,9 @@ def main(argv=None):
     ap.add_argument("--ascii", action="store_true",
                     help="force the ASCII glyph dialect even on a UTF-8 "
                          "terminal (LEGBAR_ASCII=1 does the same); pipes, "
-                         "--once and --json are always ASCII")
+                         "--once and --json are always ASCII, and so is a "
+                         "Windows console outside Windows Terminal unless "
+                         "LEGBAR_UNICODE=1")
     ap.add_argument("--no-auto-install", action="store_true",
                     help="on Windows, never offer to pip-install "
                          "windows-curses; just print the manual command")
