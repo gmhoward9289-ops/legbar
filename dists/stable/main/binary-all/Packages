@@ -388,3 +388,29 @@ Description: one screen for the whole fleet: live agent sessions beside GitHub C
  disagree. Reads only local agent state and runs read-only git and gh. It
  never writes to a tree, a registry or a session.
 
+Package: legbar
+Architecture: all
+Version: 0.3.9
+Priority: optional
+Section: utils
+Maintainer: George M. Howard <dev@swamplink.com>
+Depends: python3 (>= 3.9)
+Recommends: gh, git
+Filename: pool/main/l/legbar/legbar_0.3.9_all.deb
+Size: 55154
+MD5sum: 59bba7ae4c48c2f9ee11e87826e55cb8
+SHA1: 8ed4da6f9cb4d47eef56c4e611f850581c92273b
+SHA256: ceaea1e7c1e9778f42c5611bbe20ee4355f8b19194c7749fef20ba0b477da20a
+SHA512: f761259bcf9319a45404fbcba42cdb8c4d49aef8565ebb2fe551281fd6177535532ae18959e58f68b5d54c8ae29230a87f9c5d98e208a58ae0aa92b889854ae4
+Homepage: https://github.com/gmhoward9289-ops/legbar
+Description: one screen for the whole fleet: live agent sessions beside GitHub CI
+ A full-screen curses view with both fleet lanes on one canvas: every live
+ agent session on the machine -- Claude Code joined by pid, Cursor agents
+ inferred from transcript activity -- beside GitHub Actions runs and open
+ pull requests across every clone, with failures pinned so a red build
+ cannot scroll away.
+ .
+ Both panes are drawn from one discovery layer (henhouse), so they cannot
+ disagree. Reads only local agent state and runs read-only git and gh. It
+ never writes to a tree, a registry or a session.
+
