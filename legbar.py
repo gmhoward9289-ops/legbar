@@ -1081,56 +1081,62 @@ def help_lines(width):
     # someone whose screen draws the fisheye would be a glossary for a
     # different product. Attention keeps "!" in both dialects (see the
     # dialect tables: the live dot already means running), so that row is
-    # shared.
+    # shared. The chrome follows the dialect too: ASCII gets the title-and-
+    # dash-rule the panes get, Unicode gets one rounded frame with SYMBOLS
+    # and KEYS as interior headings, exactly as session_lines() frames its
+    # bucket labels -- a dash rule inside a Unicode frame would be the
+    # mixed frame the charter forbids.
     contested = "!!" if not G["frames"] else G["flag"] + " "
     run, chk = G["run"], G["checks"]
     ci_sigils = "%s %s %s %s %s" % (run["in_progress"], run["queued"],
                                     run["failed"], run["stuck"],
                                     run["success"])
-    rows = [
-        "HELP",
-        "-" * 4,
-        "SYMBOLS",
-        "-" * 7,
-        "  %-9s  contested -- 2+ live sessions editing one working copy"
-        % contested,
-        "   !         waiting on you past the alert age (--waiting-alert)",
-        "  cc- cu-    which tool a session is: Claude Code / Cursor",
-        "  [####--]   context used: # filled per 10%; yellow at 80, red at 100",
-        "  +1 ~3 ?2   git dirt: staged / unstaged / untracked file counts",
-        "  %s1 %s2      git drift: commits ahead / behind upstream"
-        % (G["ahead"], G["behind"]),
-        "  %-9s  ci: running / queued / failed / stuck / passed"
-        % ci_sigils,
-        "  %-9s  pr checks: red / pending / green"
-        % ("%s %s %s" % (chk["red"], chk["pending"], chk["green"])),
-        "  clean      tree settled; '-' means nothing was probed",
-        "  you 12m    that side of the conversation has waited that long",
-        "  (local)    gateway/Ollama session -- costs nothing vs paid caps",
-        "  %-9s  a value cut to fit; '%s N more' is a list cut short"
-        % (G["cut"], G["more"]),
-        "",
-        "KEYS",
-        "-" * 4,
-        "  q quit   g toggle git probing   r refresh now   ? this help",
-        "",
-        "any key to close",
+    # bar() itself draws the sample, so the glossary can never show a meter
+    # the rows do not.
+    entries = [
+        (contested, "contested -- 2+ live sessions editing one working copy"),
+        (" !", "waiting on you past the alert age (--waiting-alert)"),
+        ("cc- cu-", "which tool a session is: Claude Code / Cursor"),
+        (bar(40), "context used: # filled per 10%; yellow at 80, red at 100"),
+        ("+1 ~3 ?2", "git dirt: staged / unstaged / untracked file counts"),
+        ("%s1 %s2" % (G["ahead"], G["behind"]),
+         "git drift: commits ahead / behind upstream"),
+        (ci_sigils, "ci: running / queued / failed / stuck / passed"),
+        ("%s %s %s" % (chk["red"], chk["pending"], chk["green"]),
+         "pr checks: red / pending / green"),
+        ("clean", "tree settled; '-' means nothing was probed"),
+        ("you 12m", "that side of the conversation has waited that long"),
+        ("(local)", "gateway/Ollama session -- costs nothing vs paid caps"),
+        (G["cut"], "a value cut to fit; '%s N more' is a list cut short"
+         % G["more"]),
     ]
-    return [clip(l, width) for l in rows]
+    glossary = ["  %-10s  %s" % (sigil, meaning) for sigil, meaning in entries]
+    keys = ["  q quit   g toggle git probing   r refresh now   ? this help"]
+
+    def heading(label):
+        return [label] if G["frames"] else [label, "-" * len(label)]
+
+    body = (heading("SYMBOLS") + glossary + [""] + heading("KEYS") + keys
+            + ["", "any key to close"])
+    bw = inner_width(width)
+    body = [clip(l, bw) for l in body]
+    return section("HELP", body, width)
 
 
 def colorize_help(lines):
-    out = []
-    for line in lines:
+    """[(text, spans)] for help_lines(): titles cyan, the rest dim,
+    frame-aware like colorize_block."""
+    def spans(line):
         stripped = line.rstrip()
         if stripped in ("HELP", "SYMBOLS", "KEYS"):
-            out.append((line, [(0, len(stripped), C_CYAN, True)]))
-        elif stripped and set(stripped) == {"-"}:
-            out.append((line, [(0, len(stripped), C_CYAN, False)]))
-        else:
-            out.append((line, [(0, len(stripped), C_DIM, False)] if stripped
-                        else []))
-    return out
+            return [(0, len(stripped), C_CYAN, True)]
+        if stripped and set(stripped) == {"-"}:
+            return [(0, len(stripped), C_CYAN, False)]
+        return [(0, len(stripped), C_DIM, False)] if stripped else []
+
+    if GLYPHS["frames"]:
+        return [(l, _framed_spans(l, spans)) for l in lines]
+    return [(l, spans(l)) for l in lines]
 
 
 # Footer tiers, under width pressure: the version stamp drops whole first,

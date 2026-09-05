@@ -972,6 +972,19 @@ class HelpView(unittest.TestCase):
                 self.assertLessEqual(len(line), width, (width, line))
                 self.assertTrue(line.isascii(), line)
 
+    def test_the_bar_sample_is_the_bar_the_rows_draw(self):
+        # The glossary used to show "[####--]": brackets the rows never
+        # print, six cells where bar() draws ten. Now bar() draws it.
+        text = "\n".join(legbar.help_lines(80))
+        self.assertIn(legbar.bar(40), text)
+        self.assertNotIn("[", text)
+
+    def test_ascii_chrome_is_the_panes_title_and_rule(self):
+        lines = legbar.help_lines(80)
+        self.assertEqual(lines[:2], ["HELP", "----"])
+        self.assertIn("-------", lines)  # SYMBOLS rule
+        self.assertNotIn(legbar._UNICODE_GLYPHS["tl"], "\n".join(lines))
+
     def test_titles_are_cyan_and_the_rest_is_dim(self):
         rows = legbar.colorize_help(legbar.help_lines(80))
         by_text = {t.rstrip(): s for t, s in rows}
@@ -1593,7 +1606,36 @@ class UnicodeDialect(unittest.TestCase):
         self.assertNotIn("^1 v2", text)
         # Attention deliberately keeps "!" -- the live dot already means
         # running -- and the glossary still documents it.
-        self.assertIn("   !         waiting on you", text)
+        self.assertIn("   !          waiting on you", text)
+
+    def test_help_chrome_is_a_frame_not_dash_rules(self):
+        # One frame, one dialect: the help overlay is framed like the panes,
+        # SYMBOLS and KEYS are interior headings, and no ASCII dash rule
+        # sits inside the Unicode chrome.
+        for width in (40, 80):
+            lines = legbar.help_lines(width)
+            self.assertTrue(lines[0].startswith(
+                "%s%s HELP " % (self.G["tl"], self.G["h"])), lines[0])
+            self.assertTrue(lines[-1].startswith(self.G["bl"]), lines[-1])
+            for line in lines[1:-1]:
+                self.assertEqual(len(line), width, (width, line))
+                self.assertTrue(line.startswith(self.G["v"]), line)
+                self.assertTrue(line.endswith(self.G["v"]), line)
+                inner = line[2:-2].strip()
+                self.assertFalse(inner and set(inner) == {"-"}, line)
+            inner_texts = [l[2:-2].rstrip() for l in lines[1:-1]]
+            self.assertIn("SYMBOLS", inner_texts)
+            self.assertIn("KEYS", inner_texts)
+
+    def test_help_colour_lands_inside_the_frame(self):
+        rows = legbar.colorize_help(legbar.help_lines(80))
+        top_text, top_spans = rows[0]
+        self.assertEqual(top_spans[0][3], "dim")  # chrome at rest
+        title = next(s for s in top_spans if s[3] is True)
+        self.assertEqual(top_text[title[0]:title[0] + title[1]], " HELP ")
+        text, spans = next((t, s) for t, s in rows if "SYMBOLS" in t)
+        heading = next(s for s in spans if s[2] == legbar.C_CYAN and s[3] is True)
+        self.assertEqual(text[heading[0]:heading[0] + heading[1]], "SYMBOLS")
 
 
 class _SpanScr:
