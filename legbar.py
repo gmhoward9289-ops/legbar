@@ -276,9 +276,12 @@ def frame_lines(title, body, width):
 def section(title, body, width):
     """One block's chrome in the active dialect.
 
-    ASCII: the historical bold-title-plus-dash-rule (byte-identical to what
-    it always printed). Unicode: a rounded frame with the title in the top
-    border, replacing the title and rule entirely.
+    ASCII: the bold-title-plus-dash-rule legbar has always drawn. Unicode:
+    a rounded frame with the title in the top border, replacing the title
+    and rule entirely. The two are one lookup table apart, so an ASCII
+    render is byte-stable across a dialect swap -- but not byte-identical
+    to earlier releases: this pass changed the ASCII output deliberately
+    (header chip order, truncation notices, narrow-width shedding).
     """
     if GLYPHS["frames"]:
         return frame_lines(title, body, width)
@@ -290,7 +293,7 @@ def section(title, body, width):
 # ---------------------------------------------------------------------------
 
 
-def collect_local(use_git=True, commits=True):
+def collect_local(use_git=True, commits=True, commit_depth=None):
     """Everything except the GitHub sweep: sessions, git, commits, subagents.
 
     commits=False skips the commit feed and returns None for it, so a caller
@@ -299,6 +302,14 @@ def collect_local(use_git=True, commits=True):
     root), and it changes on the clock of humans committing, not on the
     5-second clock sessions move on -- see Model, which runs it on its own
     slower cadence for exactly that reason.
+
+    commit_depth is how many commits to ask for. A rendered frame -- --once
+    or the TUI -- can show COMMIT_LIMIT rows and has no key that reaches
+    any more, so it asks for exactly that many: the pane's "... N more"
+    notice then only ever fires when the feed really does hold rows the
+    pane cannot show, instead of on every frame of every active root
+    (permanent notice, wallpaper). --json has no pane and keeps the deeper
+    COMMIT_FEED_DEPTH so a consumer sees further back than the screen does.
 
     All local disk and git plumbing -- no network -- so this is the part
     that's fast enough to redraw on the same clock as the paint loop. Split
@@ -387,7 +398,8 @@ def collect_local(use_git=True, commits=True):
     if not use_git:
         feed = []
     elif commits:
-        feed = henhouse.commit_feed(25)
+        feed = henhouse.commit_feed(COMMIT_LIMIT if commit_depth is None
+                                    else commit_depth)
     else:
         feed = None
     claude_sids = [r.get("session_id") for r in rows if r.get("source") == "claude"]
@@ -417,12 +429,12 @@ def collect_github():
     return {"ci": events, "gh_warn": gh_warn}
 
 
-def collect(use_git=True, ci=True):
+def collect(use_git=True, ci=True, commit_depth=None):
     """The joined state both panes render from -- synchronous, for --once,
     --json and tests. The curses view uses collect_local()/collect_github()
     directly instead, on separate threads and clocks; see run_curses.Model.
     """
-    state = collect_local(use_git=use_git)
+    state = collect_local(use_git=use_git, commit_depth=commit_depth)
     state.update(collect_github() if ci else {"ci": [], "gh_warn": ""})
     return state
 
@@ -982,7 +994,13 @@ def ci_lines(state, width):
     return section("GITHUB", body, width)
 
 
+# Rows the COMMITS pane shows. Rendered paths fetch exactly this many (see
+# collect_local), so the pane's truncation notice below carries information
+# when it appears rather than decorating every frame.
 COMMIT_LIMIT = 12
+# What --json asks for: it has no pane to fit, and a consumer can use the
+# depth the screen cannot.
+COMMIT_FEED_DEPTH = 25
 
 
 def commit_lines(state, width):
@@ -1008,6 +1026,8 @@ def commit_lines(state, width):
     if len(commits) > COMMIT_LIMIT:
         # Silent truncation is a lie -- the cut ends in a notice. There is no
         # key that reaches the rest, so the notice only counts what it hid.
+        # The live paths fetch COMMIT_LIMIT, so this fires only for a state
+        # that genuinely holds more (a deeper feed handed to render()).
         body.append(clip("%s %d more" % (GLYPHS["more"],
                                          len(commits) - COMMIT_LIMIT), bw))
     return section("COMMITS", body, width)
@@ -2056,12 +2076,13 @@ def main(argv=None):
         # version first: anything programmatic reading this stream should
         # not have to shell out to --version to learn which schema it got.
         out = {"version": __version__}
-        out.update(collect(use_git=not args.no_git, ci=not args.no_ci))
+        out.update(collect(use_git=not args.no_git, ci=not args.no_ci,
+                           commit_depth=COMMIT_FEED_DEPTH))
         print(json.dumps(out, indent=2, default=str))
         return 0
     if args.once or not sys.stdout.isatty():
         # Same rule: one-shot frames are for pipes, CI logs and snapshot
-        # tests, so they stay byte-stable ASCII even on a UTF-8 tty.
+        # tests, so they stay ASCII even on a UTF-8 tty.
         set_dialect(False)
         width = shutil.get_terminal_size((160, 24)).columns
         state = collect(use_git=not args.no_git, ci=not args.no_ci)

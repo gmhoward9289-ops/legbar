@@ -892,6 +892,44 @@ class TruncationNotices(unittest.TestCase):
             text, spans = next((t, s) for t, s in rows if "more" in t)
             self.assertEqual(spans[0][2], legbar.C_YELLOW, text)
 
+    def test_the_rendered_paths_fetch_only_what_the_pane_shows(self):
+        # commit_feed(25) against a 12-row pane made "... 13 more" a fixture
+        # of every frame -- a notice that never varies carries nothing. The
+        # rendered paths ask for COMMIT_LIMIT; --json, which has no pane,
+        # keeps the deeper feed.
+        from unittest import mock
+        asked = []
+        quiet = {"load_sessions": [], "load_transcripts": ({}, ""),
+                 "load_registry": ({}, {}), "build": [],
+                 "transcript_index": {}, "load_cursor_sessions": [],
+                 "list_subagents": []}
+        patches = [mock.patch.object(henhouse, name, return_value=val)
+                   for name, val in quiet.items()]
+        patches.append(mock.patch.object(
+            henhouse, "commit_feed", side_effect=lambda n: asked.append(n) or []))
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        legbar.collect_local()
+        legbar.collect_local(commit_depth=legbar.COMMIT_FEED_DEPTH)
+        self.assertEqual(asked, [legbar.COMMIT_LIMIT, legbar.COMMIT_FEED_DEPTH])
+        self.assertGreater(legbar.COMMIT_FEED_DEPTH, legbar.COMMIT_LIMIT)
+
+    def test_json_asks_deeper_than_once(self):
+        from unittest import mock
+        import io
+        calls = []
+
+        def fake_collect(**kw):
+            calls.append(kw.get("commit_depth"))
+            return {"sessions": [], "ci": [], "commits": [], "subagents": [],
+                    "warn": "", "gh_warn": "", "use_git": True}
+        with mock.patch.object(legbar, "collect", side_effect=fake_collect), \
+             mock.patch.object(legbar.sys, "stdout", io.StringIO()):
+            legbar.main(["--json"])
+            legbar.main(["--once"])
+        self.assertEqual(calls, [legbar.COMMIT_FEED_DEPTH, None])
+
     def test_the_band_overflow_line_is_yellow_not_dim(self):
         st = {"sessions": [session(name="s%d" % i,
                                    status=henhouse.ATTENTION[0], idle_secs=i)
