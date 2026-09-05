@@ -749,13 +749,18 @@ class HeaderDegradation(unittest.TestCase):
             "warn": "", "gh_warn": ""}
 
     def test_the_clock_survives_every_width(self):
-        import re
-        for width in (200, 80, 60, 40, 30, 20, 10):
+        for width in (200, 80, 60, 40, 30, 20, 10, 8):
             head = legbar.header(self.state(), width)
             self.assertLessEqual(len(head), width, (width, head))
-            self.assertRegex(head, self.CLOCK[:min(len(self.CLOCK),
-                                                   width * 4)] if width >= 8
-                             else r"\d", (width, head))
+            # The full HH:MM:SS, always at the end of the line.
+            self.assertRegex(head, self.CLOCK + "$", (width, head))
+
+    def test_below_the_clock_the_clock_is_what_gets_clipped(self):
+        # Narrower than the clock itself there is nothing left to shed, so
+        # what remains is the clock's own head with the cut marked.
+        head = legbar.header(self.state(), 5)
+        self.assertEqual(len(head), 5)
+        self.assertRegex(head, r"^\d\d:\d~$")
 
     def test_bookkeeping_sheds_before_trouble(self):
         # "local" and "held" are accounting; "need you" is a person blocked.
@@ -1689,14 +1694,44 @@ class PaintFakeScreen(unittest.TestCase):
                      colors=True)
         return scr
 
-    def test_nothing_is_written_past_the_width(self):
+    def test_the_layout_never_needs_puts_clip(self):
+        # put() slices anything past the width, which would silently hide a
+        # layout bug. So assert the layout itself: every line paint() is
+        # handed fits, and every span it paints ends inside its own line --
+        # the slice never has anything to do.
         for dialect in (False, True):
             legbar.set_dialect(dialect)
             self.addCleanup(legbar.set_dialect, False)
+            st = self.rich_state()
             for width in (40, 100):
-                for y, x, text, attr in self.paint(width).writes:
-                    self.assertLessEqual(x + len(text), width,
-                                         (dialect, width, y, x, text))
+                for line in legbar.render(st, width):
+                    self.assertLessEqual(len(line), width, (dialect, line))
+                split = legbar.pane_split(width)
+                blocks = ([(legbar.colorize_band(legbar.action_lines(st, width)),
+                            width)]
+                          + ([(legbar.colorize_sessions(st, split[0]), split[0]),
+                              (legbar.colorize_ci(st, split[1]), split[1])]
+                             if split else
+                             [(legbar.colorize_sessions(st, width), width),
+                              (legbar.colorize_ci(st, width), width)]))
+                for rows, w in blocks:
+                    for text, spans in rows:
+                        self.assertLessEqual(len(text), w, (dialect, text))
+                        for start, length, pair, bold in spans:
+                            self.assertLessEqual(start + length, len(text),
+                                                 (dialect, text, spans))
+
+    def test_the_full_frame_reaches_the_screen(self):
+        # And having proven the layout fits, the paint layer writes each
+        # framed line whole: the border write spans the entire pane width.
+        legbar.set_dialect(True)
+        self.addCleanup(legbar.set_dialect, False)
+        for width in (40, 100):
+            tops = [w for w in self.paint(width).writes
+                    if w[2].startswith(legbar.GLYPHS["tl"])]
+            self.assertTrue(tops, width)
+            for y, x, text, attr in tops:
+                self.assertTrue(text.endswith(legbar.GLYPHS["tr"]), text)
 
     def test_unicode_paint_draws_the_frames(self):
         legbar.set_dialect(True)
