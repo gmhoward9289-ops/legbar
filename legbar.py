@@ -1293,6 +1293,11 @@ def _session_row_spans(line, show_git, width):
     show_bar, show_sub, show_git_cell = _row_cells(width, show_git)
     spans = []
     if line[:1] == GLYPHS["flag"]:
+        # Deliberate departure from the charter, which has the contested
+        # dot take the row's status colour: legbar paints it red whatever
+        # the status. Contested is legbar's destructive class -- the one
+        # signal that loses work rather than time (see actions()) -- and
+        # a red flag on an otherwise green working row is the point.
         spans.append((0, 1, C_RED, True))
     # The name column is "cc-"/"cu-" + name. The prefix is colour-coded by
     # tool so a fleet reads as two populations at a glance, without anyone
@@ -1485,6 +1490,9 @@ def _band_spans(line):
     if stripped and set(stripped) == {"-"}:
         return [(0, len(stripped), C_CYAN, False)]
     if line[:2] == GLYPHS["contested"]:
+        # Whole row red, not status-coloured as the charter would have the
+        # dot: the destructive class is loud from the first frame (see
+        # WAITING_LOUD_SECS) and this band is where it shouts.
         return [(0, len(stripped), C_RED, True)]
     if line[:2] == GLYPHS["attention"]:
         return [(0, len(stripped), C_YELLOW, True)]
