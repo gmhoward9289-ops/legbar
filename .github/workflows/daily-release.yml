@@ -34,11 +34,11 @@ jobs:
       # cannot satisfy -- so with github.token the push is rejected and the
       # whole release dies about ten seconds in, with nothing published and no
       # obvious red flag beyond one failed step in a scheduled run nobody
-      # watches. RELEASE_PUSH_TOKEN is a PAT allowed to bypass the ruleset;
-      # the `||` fallback keeps the workflow parseable and lets the gate and
-      # verify steps still run on a fork or before the secret exists.
-      # persist-credentials: true is what leaves that token in the checkout's
-      # git config for the later `git push` steps to actually use.
+      # watches. The token comes from a GitHub App installed on this repo
+      # (APP_ID + APP_PRIVATE_KEY secrets), minted fresh each run and allowed
+      # to bypass the ruleset -- it replaced a PAT that had an expiry date to
+      # forget. persist-credentials: true is what leaves that token in the
+      # checkout's git config for the later `git push` steps to actually use.
       - name: Mint a GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v2
@@ -109,13 +109,17 @@ jobs:
           git config user.name "legbar-release-bot"
           git config user.email "dev@swamplink.com"
           if [ "${{ steps.plan.outputs.action }}" = "bump" ]; then
-            git add legbar.py legbar.1 package.json packaging/legbar.rb
+            # CHANGELOG.md is part of the bump: check-version-consistency.sh
+            # requires its newest heading to match, so leaving it out of the
+            # commit would land a tree that fails its own lint.
+            git add legbar.py legbar.1 package.json packaging/legbar.rb CHANGELOG.md
             git commit -m "chore: release v${version}"
             git push origin HEAD:main
           fi
           # This tag push fires release.yml on its own, because it goes out as
-          # RELEASE_PUSH_TOKEN rather than GITHUB_TOKEN -- a PAT-pushed tag does
-          # trigger other workflows, where a GITHUB_TOKEN-pushed one does not.
+          # the App token rather than GITHUB_TOKEN -- an App- (or PAT-) pushed
+          # tag does trigger other workflows, where a GITHUB_TOKEN-pushed one
+          # does not.
           # leghorn used to carry an explicit `gh workflow run release.yml` step
           # here to work around that, and once its PAT landed the step started
           # producing a second concurrent pipeline for every release: two

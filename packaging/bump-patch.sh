@@ -52,5 +52,61 @@ sed -i "s/^\([[:space:]]*\"version\"[[:space:]]*:[[:space:]]*\)\"[^\"]*\"/\1\"$N
 sed -i "s#releases/download/v[^/]*/legbar-[^/]*\.tar\.gz#releases/download/v$NEXT/legbar-$NEXT.tar.gz#g" packaging/legbar.rb
 sed -i "s/^  version \".*\"/  version \"$NEXT\"/" packaging/legbar.rb
 
+# --- CHANGELOG.md -------------------------------------------------------------
+# check-version-consistency.sh requires the newest `## v` heading to equal
+# __version__, so a bump that touches every other artifact but not this one
+# fails its own consistency check -- which is exactly what daily-release did
+# for a week after that check landed. The entry is built from the commit
+# subjects since the latest v* tag (what the gate step already lists), grouped
+# by conventional-commit type. `chore: release` commits are the previous bump's
+# own footprint and are left out. With no tag to diff against, a single
+# "see git history" bullet keeps the bump moving rather than failing it.
+LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -1 || true)
+SUBJECTS=""
+if [ -n "$LATEST_TAG" ]; then
+  SUBJECTS=$(git log "$LATEST_TAG..HEAD" --format='%s')
+fi
+CHANGELOG_SUBJECTS="$SUBJECTS" LATEST_TAG="$LATEST_TAG" python3 - "$NEXT" "$(date +%F)" <<'PY'
+import os
+import re
+import sys
+
+version, today = sys.argv[1], sys.argv[2]
+path = "CHANGELOG.md"
+
+groups = {"Added": [], "Fixed": [], "Changed": []}
+for subject in os.environ.get("CHANGELOG_SUBJECTS", "").splitlines():
+    subject = subject.strip()
+    if not subject or re.match(r"^chore(\(.*\))?!?:\s*release\b", subject):
+        continue
+    m = re.match(r"^(\w+)(\([^)]*\))?!?:\s*(.+)$", subject)
+    kind, body = (m.group(1).lower(), m.group(3)) if m else ("", subject)
+    bucket = {"feat": "Added", "fix": "Fixed"}.get(kind, "Changed")
+    groups[bucket].append(body if m else subject)
+
+lines = [f"## v{version} - {today}", ""]
+if any(groups.values()):
+    for name in ("Added", "Fixed", "Changed"):
+        if groups[name]:
+            lines.append(f"### {name}")
+            lines.extend(f"- {b}" for b in groups[name])
+            lines.append("")
+else:
+    lines += ["- see git history", ""]
+entry = "\n".join(lines) + "\n"
+
+with open(path, encoding="utf-8") as fh:
+    text = fh.read()
+m = re.search(r"^## v", text, flags=re.M)
+if m:
+    text = text[:m.start()] + entry + text[m.start():]
+else:
+    text = text.rstrip("\n") + "\n\n" + entry
+with open(path, "w", encoding="utf-8", newline="\n") as fh:
+    fh.write(text)
+print(f"CHANGELOG.md: added ## v{version} - {today} "
+      f"({sum(len(v) for v in groups.values())} bullets since {os.environ.get('LATEST_TAG') or 'no tag'})")
+PY
+
 packaging/check-version-consistency.sh
 echo "ready to commit and tag v$NEXT"
