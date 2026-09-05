@@ -46,7 +46,8 @@ rb_url_file=$(sed -n 's#.*url ".*/legbar-\([^"]*\)\.tar\.gz".*#\1#p' \
               packaging/legbar.rb)
 report "legbar.rb url filename" "$rb_url_file" "$VERSION"
 
-rb_version=$(sed -n 's/^\s*version "\([^"]*\)".*/\1/p' packaging/legbar.rb)
+# [[:space:]] not \s: BSD sed (macOS) has no \s, and silently matches nothing.
+rb_version=$(sed -n 's/^[[:space:]]*version "\([^"]*\)".*/\1/p' packaging/legbar.rb)
 report "legbar.rb version" "$rb_version" "$VERSION"
 
 # The refresh-checksum comment above it should point at the same tag, or the
@@ -56,7 +57,7 @@ rb_hint=$(sed -n 's#.*curl -sL https://github.com/[^ ]*/releases/download/v\([0-
 report "legbar.rb curl comment" "$rb_hint" "$VERSION"
 
 # --- pyproject: version must be sourced from legbar.py, not restated ----------
-if grep -qE '^\s*version\s*=\s*"' pyproject.toml; then
+if grep -qE '^[[:space:]]*version[[:space:]]*=[[:space:]]*"' pyproject.toml; then
   echo "  DRIFT pyproject.toml         has a literal version=; it must stay dynamic" >&2
   echo "        (keep [tool.hatch.version] path = \"legbar.py\" as the only source)" >&2
   fail=1
