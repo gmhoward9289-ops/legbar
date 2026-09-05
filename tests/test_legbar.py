@@ -1757,5 +1757,72 @@ class PaintFakeScreen(unittest.TestCase):
                             if t.strip()))
 
 
+class _PaletteCurses:
+    """A curses module with a configurable colour numbering.
+
+    ncurses numbers colours in xterm order (BLUE=4); PDCurses, which
+    windows-curses wraps, uses Windows console order (BLUE=1, RED=4). The
+    identity role must land on bright blue under both.
+    """
+
+    class error(Exception):
+        pass
+
+    def __init__(self, colors, blue, red):
+        self.COLORS = colors
+        self.COLOR_BLACK = 0
+        self.COLOR_BLUE = blue
+        self.COLOR_RED = red
+        self.COLOR_GREEN = 2
+        self.COLOR_YELLOW = 3 if blue == 4 else 6
+        self.COLOR_CYAN = 6 if blue == 4 else 3
+        self.COLOR_MAGENTA = 5
+        self.COLOR_WHITE = 7
+        self.pairs = {}
+
+    def start_color(self):
+        pass
+
+    def use_default_colors(self):
+        pass
+
+    def init_pair(self, pair, fg, bg):
+        self.pairs[pair] = (fg, bg)
+
+
+class IdentityBlueIndex(unittest.TestCase):
+    """Bright blue is COLOR_BLUE + 8, never a hard-coded xterm index.
+
+    Confirmed on a Windows console: requesting the literal 12 under PDCurses
+    painted every repo name bright red, because there 12 = 8 + COLOR_RED.
+    """
+
+    def blue_fg(self, curses):
+        legbar.init_colors(curses)
+        return curses.pairs[legbar.C_BLUE][0]
+
+    def test_xterm_ordering_gets_bright_blue(self):
+        curses = _PaletteCurses(colors=256, blue=4, red=1)
+        self.assertEqual(self.blue_fg(curses), 12)
+
+    def test_windows_console_ordering_gets_bright_blue_not_red(self):
+        curses = _PaletteCurses(colors=16, blue=1, red=4)
+        fg = self.blue_fg(curses)
+        self.assertEqual(fg, curses.COLOR_BLUE + 8)
+        self.assertNotEqual(fg, curses.COLOR_RED + 8)
+
+    def test_eight_colour_terminals_fall_back_to_plain_blue(self):
+        for blue, red in ((4, 1), (1, 4)):
+            curses = _PaletteCurses(colors=8, blue=blue, red=red)
+            self.assertEqual(self.blue_fg(curses), curses.COLOR_BLUE)
+
+    def test_the_bright_index_is_never_a_literal(self):
+        # The regression was a literal 12 in init_colors; guard the source.
+        import inspect
+        src = inspect.getsource(legbar.init_colors)
+        self.assertNotIn("= 12 ", src)
+        self.assertIn("COLOR_BLUE + 8", src)
+
+
 if __name__ == "__main__":
     unittest.main()

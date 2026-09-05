@@ -1247,11 +1247,15 @@ def init_colors(curses):
         bg = -1
     except curses.error:
         bg = curses.COLOR_BLACK
-    # Plain ANSI blue (4) is illegible on common dark palettes; the charter's
-    # identity role asks for xterm-256 bright blue (index 12) when the
-    # terminal has it, and always pairs blue with bold so 8-colour terminals
-    # brighten it instead.
-    blue = 12 if curses.COLORS >= 16 else curses.COLOR_BLUE
+    # Plain ANSI blue is illegible on common dark palettes; the charter's
+    # identity role asks for bright blue when the terminal has 16 colours,
+    # and always pairs blue with bold so 8-colour terminals brighten it
+    # instead. Bright blue is COLOR_BLUE + 8, never the literal 12: ncurses
+    # numbers colours in xterm order (BLUE=4, so bright blue is 12), but
+    # PDCurses -- what windows-curses wraps -- uses Windows console order
+    # (BLUE=1, RED=4), where 12 = 8 + 4 is bright RED. Deriving from the
+    # module's own constant lands on the right colour under both.
+    blue = curses.COLOR_BLUE + 8 if curses.COLORS >= 16 else curses.COLOR_BLUE
     for pair, fg in (
         (C_DIM, curses.COLOR_WHITE),
         (C_GREEN, curses.COLOR_GREEN),
