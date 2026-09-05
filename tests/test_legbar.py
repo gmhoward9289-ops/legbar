@@ -764,6 +764,23 @@ class HeaderDegradation(unittest.TestCase):
         self.assertIn("need you", head)
         self.assertIn("ci red", head)
 
+    def test_contested_outlives_need_you(self):
+        # actions() ranks a contested tree above a waiting session -- it is
+        # the one item that destroys work -- and the header must not invert
+        # that under width pressure. Narrow until one of the two is gone:
+        # it is "need you", and "contested" is still standing.
+        st = self.state()
+        st["sessions"] += [session(name="a", contested=True, worktree="/w"),
+                           session(name="b", contested=True, worktree="/w")]
+        full = legbar.header(st, 200)
+        self.assertLess(full.index("contested"), full.index("need you"))
+        for width in range(len(full) - 1, 20, -1):
+            head = legbar.header(st, width)
+            if "need you" not in head:
+                break
+        self.assertNotIn("need you", head)
+        self.assertIn("contested", head)
+
     def test_the_shed_order_is_right_to_left(self):
         # Every narrower header is a prefix-chips subset of the wider one:
         # chips only ever vanish from the right end.

@@ -696,15 +696,18 @@ def header(state, width):
     sub_n = sum(r.get("subagents") or 0 for r in state["sessions"])
 
     # Chips in shed order: trouble leftmost, bookkeeping rightmost, so the
-    # rightmost chip is the first to go as the window narrows. The clock is
-    # not a chip at all -- it is pinned after the survivors, because a wall
-    # display must always answer "when did this last update" (the charter's
-    # rule 3); clipping the whole joined line used to lose the clock first.
+    # rightmost chip is the first to go as the window narrows. Trouble is
+    # ordered by what ignoring it costs, the same ranking actions() uses:
+    # contested first (the only item that destroys work), then a person
+    # blocked, then red CI. The clock is not a chip at all -- it is pinned
+    # after the survivors, because a wall display must always answer "when
+    # did this last update" (the charter's rule 3); clipping the whole
+    # joined line used to lose the clock first.
     chips = ["%s  %d session%s" % (NAME, n, "" if n == 1 else "s")]
-    if attention:
-        chips.append("%d need you (%s)" % (attention, henhouse.ago(waits[-1])))
     if contested:
         chips.append("%d contested" % contested)
+    if attention:
+        chips.append("%d need you (%s)" % (attention, henhouse.ago(waits[-1])))
     if red:
         chips.append("%d ci red" % red)
     if dirty_trees:
