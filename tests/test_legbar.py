@@ -1009,6 +1009,18 @@ class FooterTiers(unittest.TestCase):
         self.assertIn(self.AGES, line)
         self.assertNotIn("r refresh", line)
 
+    def test_the_extra_hints_return_once_the_ages_are_gone(self):
+        # One column too narrow for core + ages: the ages go, and the extra
+        # key hints -- which fit on their own -- come back rather than the
+        # footer dropping straight to the bare core.
+        hints = legbar.FOOTER_CORE + legbar.FOOTER_EXTRA
+        for width in (len(hints), len(hints) + 1):
+            self.assertLess(width, len(legbar.FOOTER_CORE) + len(self.AGES) + 2)
+            line = legbar.footer_line(width, self.AGES)
+            self.assertEqual(line, hints, (width, line))
+        self.assertEqual(legbar.footer_line(len(hints) - 1, self.AGES),
+                         legbar.FOOTER_CORE)
+
     def test_quit_and_help_survive_every_width(self):
         for width in (200, 80, 40, 20, 14):
             line = legbar.footer_line(width, self.AGES)

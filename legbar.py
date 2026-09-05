@@ -1134,8 +1134,11 @@ def colorize_help(lines):
 
 
 # Footer tiers, under width pressure: the version stamp drops whole first,
-# then the secondary key hints, then the data ages. `q quit  ? help` survives
-# every tier -- quit and help have no other way to be discovered.
+# then the secondary key hints, then the data ages -- and once the ages are
+# gone the extra hints come back if they alone fit, so a 32-column footer
+# reads `q quit  ? help  g git  r refresh` rather than the bare core.
+# `q quit  ? help` survives every tier -- quit and help have no other way
+# to be discovered.
 FOOTER_CORE = "q quit  ? help"
 FOOTER_EXTRA = "  g git  r refresh"
 
@@ -1163,6 +1166,7 @@ def footer_line(width, ages=""):
         (FOOTER_CORE + FOOTER_EXTRA, (ages, stamp)),
         (FOOTER_CORE + FOOTER_EXTRA, (ages,)),
         (FOOTER_CORE, (ages,)),
+        (FOOTER_CORE + FOOTER_EXTRA, ()),
         (FOOTER_CORE, ()),
     ):
         right = "  ".join(t for t in tail if t)
