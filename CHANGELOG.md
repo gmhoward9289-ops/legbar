@@ -17,6 +17,11 @@ already says the API may move.
   becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
   the same build. `release.yml` checks the normalisation on every tag.
 
+## v0.3.11 - 2026-09-06
+
+### Changed
+- bump actions/create-github-app-token from 2 to 3 (#42)
+
 ## v0.3.10 - 2026-09-06
 
 ### Changed
