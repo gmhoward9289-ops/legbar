@@ -20,22 +20,36 @@ jobs:
     # pyproject.toml, platform-gated), which is why this job installs it
     # explicitly rather than relying on the package install step alone.
     #
-    # 3.14 is in the matrix because it is what the primary dev box runs -- the
-    # sibling repos went months testing only 3.9 and 3.13 while every local run
-    # used 3.14. macos-15-intel is here because macos-latest is arm64, so without it
-    # Intel Macs have no coverage.
+    # This is deliberately not a full os x python cross product. The
+    # interpreter is tested on Linux, where a leg costs seconds: 3.9 is the
+    # floor, 3.13 is what the Homebrew formula pins, and 3.14 is what the
+    # primary dev box runs (the sibling repos went months testing only 3.9 and
+    # 3.13 while every local run used 3.14). The other two platforms are here
+    # to prove the platform claim, not to re-test the interpreter three times:
     #
-    # Windows is excluded from 3.14 on purpose: windows-curses wheels top out at
-    # 3.13, so that leg would fail on dependency resolution rather than on
-    # anything in this repo. Drop the exclusion once upstream ships a wheel.
+    # - macOS gets one leg, on 3.13, because that is the python@3.13 the
+    #   formula installs -- the interpreter nearly every Mac user runs this
+    #   under. There is no Intel leg: this is pure-Python stdlib code with no
+    #   compiled dependency on macOS, so arm64 vs x86_64 cannot change a
+    #   result. (macos-15-intel used to be here; six macOS legs per PR were
+    #   re-running the same stdlib on the scarcest runners GitHub has.)
+    # - Windows gets the floor and the ceiling, because curses there is a
+    #   per-interpreter binary wheel, so each Python is a genuinely different
+    #   artifact. The ceiling is 3.13, not 3.14: windows-curses wheels top out
+    #   at 3.13, so a 3.14 leg would fail on dependency resolution rather than
+    #   on anything in this repo. Raise it once upstream ships a wheel.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+        os: [ubuntu-latest]
         python: ["3.9", "3.13", "3.14"]
-        exclude:
+        include:
+          - os: macos-latest
+            python: "3.13"
           - os: windows-latest
-            python: "3.14"
+            python: "3.9"
+          - os: windows-latest
+            python: "3.13"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -160,3 +174,28 @@ jobs:
         with:
           path: legbar.py,henhouse.py,docs,.
           skip: .git,*.pyc,__pycache__,tests/fixtures
+
+  # The branch ruleset requires this one check instead of naming every job
+  # above. Required checks match by name, and a matrix leg's name is its
+  # parameters, so a matrix change silently strands the ruleset: leghorn's
+  # kept demanding "test (macos-13, ...)" long after that leg was gone, and
+  # every PR there sat on "Expected -- waiting for status", mergeable only
+  # through admin bypass. This job's name never changes; what it asserts is
+  # "every job in ci.yml succeeded".
+  #
+  # `if: always()` is load-bearing. Without it a failed dependency skips this
+  # job, and a skipped required check shows as pending forever rather than
+  # failed. The jq line then does the real gating: success only, so a
+  # cancelled or skipped job fails the gate instead of slipping through as
+  # merely not-a-failure.
+  ci-ok:
+    if: always()
+    needs: [test, lint, codespell]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job in ci.yml succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS"
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' > /dev/null
