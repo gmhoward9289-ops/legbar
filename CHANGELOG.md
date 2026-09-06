@@ -17,6 +17,11 @@ already says the API may move.
   becomes `0.2.0a0`), so the tag and the PyPI page would read differently for
   the same build. `release.yml` checks the normalisation on every tag.
 
+## v0.3.10 - 2026-09-06
+
+### Changed
+- trim the test matrix to one macOS leg and add a ci-ok gate check (#45)
+
 ## v0.3.9 - 2026-09-05
 
 ### Fixed
